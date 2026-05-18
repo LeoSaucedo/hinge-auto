@@ -6,8 +6,12 @@
 > Real risk of account ban with no appeal. Treat this as an educational toy
 > for a single throwaway account, not a dating strategy.
 >
-> - One account only. Low volume. **Keep `DRY_RUN = True` until you have
->   watched a full session end-to-end and confirmed the decisions look sane.**
+> - One account only. Start with a low `MAX_LIKES_PER_SESSION` (5–10)
+>   while you tune your rubric, then raise it.
+> - **Get Hinge+ if you're going to use this seriously.** It removes the
+>   daily like cap (~8–10/day on free tier) and this repo is basically
+>   the most efficient way to use the subscription — the bot does the
+>   liking for you, so you get full value without ever opening the app.
 > - No warranty. No support. Your account, your problem.
 > - The repo exists because automating a stitched-vision + LLM-judge loop
 >   on a phone UI is an interesting AI engineering exercise, not because
@@ -20,7 +24,7 @@ If you cloned this and you're not sure where to start, open the
 directory in Claude Code, Codex CLI, Cursor, or any agent that
 respects `AGENTS.md` and say _"help me set this up"_. The agent will
 walk you through emulator config, calibration, writing a rubric, and
-the first dry run.
+the first live run.
 
 If you'd rather do it manually, read on.
 
@@ -50,14 +54,21 @@ personalized opener.
    Open the resulting `calibrate.png` in any image viewer that shows cursor
    coordinates (Paint, IrfanView, Preview's tool inspector) and edit
    `config.py` `COORDS` to match.
-6. Run the loop:
+6. Pick a mode in `modes/` (start with `example_lenient.py` or
+   `example_strict.py`), set `ACTIVE_MODE` in `config.py` to match.
+   Set `MAX_LIKES_PER_SESSION = 5` for your first run.
+7. Run the loop:
    ```
    python main.py
    ```
-   The default config has `DRY_RUN = True` — it captures, judges, logs,
-   and force-skips so nothing is sent. Watch a few profiles. When you're
-   sure the decisions match your rubric, flip `DRY_RUN = False` in
-   `config.py`.
+   Watch the first few decisions print live. If a decision or opener
+   looks wrong, Ctrl-C, edit `PREFERENCES` in your mode file, and re-run.
+   Raise the cap once decisions consistently match your rubric.
+
+   (Optional) `DRY_RUN = True` in `config.py` runs the judge without
+   sending likes, but every "would-like" profile gets force-skipped and
+   is gone from your queue — usually not worth it. Small live batches
+   are the better feedback loop.
 
 ## Writing your own mode
 
@@ -127,9 +138,15 @@ ADB capture  →  frame stitching  →  Claude judge  →  action
 
 ## Safety and rate limits
 
-- Keep `DRY_RUN = True` for your first runs.
+- Start your first session with `MAX_LIKES_PER_SESSION = 5` so a wrong
+  rubric doesn't burn a full batch on bad openers. Raise once decisions
+  look right.
 - `MAX_LIKES_PER_SESSION = 25` is the shipped default. Going higher
   tends to trigger Hinge's soft-throttle (empty Discover after a burst).
+- **Get Hinge+.** Without it Hinge caps free accounts at roughly 8–10
+  likes/day, which makes this tool pointless. With it, the bot becomes
+  the most efficient way to use the subscription — you get the full
+  daily allotment of likes without spending any time in the app.
 - Don't change locations more than ~2 times per day. Frequent MyMove
   changes get throttled.
 - One account. Don't run this on your real Hinge account.

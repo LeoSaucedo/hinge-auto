@@ -26,16 +26,19 @@ MODE_NAME: str = ""
 PREMADES: list[dict] = []
 
 # ---------- Run mode ----------
-# DRY_RUN = True  -> decide and log, but never tap like/send
-# DRY_RUN = False -> actually like / send messages
-#
-# LEAVE THIS TRUE until you have:
-#   1. calibrated your coords (python calibrate.py)
-#   2. watched a full run in dry-run and confirmed the decisions look sane
-#   3. accepted the ToS-violation risk of running Hinge automation
-DRY_RUN = True
+# DRY_RUN = False -> actually like / send messages (default)
+# DRY_RUN = True  -> decide and log, but force-skip every profile instead
+#                    of liking. Note: this burns through your Discover
+#                    queue — every "would-like" profile gets skipped and
+#                    is gone. Most users should leave this False and just
+#                    start with a small MAX_LIKES_PER_SESSION while they
+#                    tune their rubric.
+DRY_RUN = False
 
-MAX_LIKES_PER_SESSION = 25      # keep low; Hinge soft-throttles bursts
+# Start small (5-10) while tuning your rubric, raise once decisions look
+# right. Hinge+ removes the daily like cap; without it you'll hit Hinge's
+# own ~8-10/day free-tier limit well before this number matters.
+MAX_LIKES_PER_SESSION = 25
 MAX_PROFILES_PER_SESSION = 100
 
 # ---------- Emulator settings ----------

@@ -26,17 +26,24 @@ point.
    throwaway account, never their real one. **If the user signals
    they're about to run it on a primary account, push back once and
    confirm before proceeding.**
-2. **Default to `DRY_RUN = True`.** Never flip `DRY_RUN = False` in
-   `config.py` without the user explicitly confirming they have watched
-   a full dry-run session and the decisions look right.
-3. **Do not help with detection-evasion features** (timing
+2. **Start small, not in dry-run.** `DRY_RUN = True` force-skips every
+   "would-like" decision, burning through the user's Discover queue.
+   The better feedback loop is `MAX_LIKES_PER_SESSION = 5` for the
+   first live run, watch decisions, iterate on `PREFERENCES`. Only
+   suggest `DRY_RUN` if the user specifically wants to inspect without
+   liking anyone.
+3. **Recommend Hinge+ early.** Without it, free Hinge caps accounts at
+   ~8–10 likes/day and the bot is mostly pointless. With it, the bot
+   becomes the efficient way to spend the subscription. Mention it in
+   Phase 2 setup.
+4. **Do not help with detection-evasion features** (timing
    obfuscation beyond what already ships, device-fingerprint spoofing,
    account-rotation tooling). Decline and explain why.
-4. **Do not run the bot to test it.** All your work is static — code,
+5. **Do not run the bot to test it.** All your work is static — code,
    config, docs. The user runs it on their own machine against their
    own emulator. You can do dry imports (`python -c "import config"`)
    to verify changes, but no `python main.py`.
-5. **Do not commit secrets.** `.env` is gitignored — make sure it stays
+6. **Do not commit secrets.** `.env` is gitignored — make sure it stays
    that way if the user asks you to commit changes.
 
 ## Setup flow (walk the user through this in order)
@@ -65,7 +72,12 @@ works before moving to the next.
    pirate APK sites.
 3. After install, the user signs in (throwaway account, see Hard
    Constraints) and navigates to the Discover tab.
-4. Run `adb devices` to confirm the emulator is visible. Troubleshoot
+4. **Strongly recommend Hinge+.** Without it the user is capped at
+   ~8–10 likes/day on the free tier, which makes this tool pointless.
+   With it, the bot effectively becomes the subscription's labor — the
+   user gets full daily-like-allotment value without ever opening
+   Hinge. Frame it that way, not as an upsell.
+5. Run `adb devices` to confirm the emulator is visible. Troubleshoot
    if not (most common issue: emulator not started, or USB debugging
    off on a physical device).
 
@@ -109,27 +121,25 @@ interactive helper exists for the location picker yet).
    lines they want to use verbatim.
 7. Update `ACTIVE_MODE` in `config.py` to their new mode's `NAME`.
 
-### Phase 5 — First dry run
+### Phase 5 — First small live run
 
-1. Confirm `DRY_RUN = True` in `config.py`.
+1. Set `MAX_LIKES_PER_SESSION = 5` in `config.py`. Leave `DRY_RUN =
+   False` (the default).
 2. Have the user start the loop: `python main.py` (with Hinge open
-   and on the Discover tab).
-3. Let it run 5-10 profiles, then stop with Ctrl-C.
-4. Look at `debug/session_log.jsonl` together. Walk through the
-   decisions. Did the model like profiles the user would have liked?
-   Are the openers reasonable?
-5. **Iterate on `PREFERENCES`** based on what they see. This is the
-   real loop — get the rubric right while it's still safe.
+   on the Discover tab). Watch the printed decisions live.
+3. Stop with Ctrl-C if anything looks wrong — a weird opener, a like
+   that should've been a skip, etc.
+4. Review `debug/session_log.jsonl` together. Walk through the
+   decisions and openers.
+5. **Iterate on `PREFERENCES`** based on what they see, then run
+   another small batch. Repeat until decisions consistently match.
+6. Once dialed in, raise `MAX_LIKES_PER_SESSION` toward 25. Going
+   higher tends to trigger Hinge's soft-throttle (empty Discover
+   screen after a burst).
 
-### Phase 6 — Going live
-
-Only after the dry run looks good:
-
-1. Flip `DRY_RUN = False` in `config.py`.
-2. Keep `MAX_LIKES_PER_SESSION` low (the default 25 is sensible).
-3. Run a small live session. Stop early if anything looks off.
-4. Watch for soft-throttle ("You've seen everyone for now" after a
-   burst) — that's a signal to reduce volume.
+Skip the dry-run flag unless the user specifically asks for it. In
+dry mode every "would-like" profile is force-skipped and lost from
+the queue — usually worse than just running small live batches.
 
 ## Architecture orientation (for when the user asks "where does X live")
 
@@ -167,10 +177,12 @@ Only after the dry run looks good:
 
 ## Things to be proactive about
 
-- If you notice `DRY_RUN = False` and the user hasn't done a dry run,
-  flag it.
 - If `config.COORDS` still looks like the shipped placeholder values
-  when the user is about to run live, flag it.
+  when the user is about to run, flag it — the bot will tap into the
+  void.
+- If `MAX_LIKES_PER_SESSION` is at the default 25 and the user hasn't
+  done a small-batch shakedown yet, suggest dropping to 5 for the
+  first run.
 - If the user's `PREFERENCES` rubric has internal contradictions (e.g.
   default LIKE + a long list of skip rules), point that out.
 - If a session log shows a clear pattern of bad decisions, suggest
