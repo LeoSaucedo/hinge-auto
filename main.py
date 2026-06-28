@@ -259,6 +259,10 @@ def main() -> int:
     print("Starting in 5s. Make sure Hinge is open on the Discover tab.")
     time.sleep(5)
 
+    # Wake screen and launch Hinge
+    adb.wake_screen()
+    adb.launch_app("co.hinge.app")
+
     likes_sent = 0
     skips = 0
     profiles_seen = 0
@@ -405,6 +409,10 @@ def main() -> int:
         )
 
     print(f"\nDone. {likes_sent} likes sent across {profiles_seen} profiles.")
+
+    # Cleanup: go home and turn screen off
+    adb.go_home()
+    adb.turn_screen_off()
     return 0
 
 

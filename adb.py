@@ -83,3 +83,33 @@ def scroll_up() -> None:
 def jitter_sleep(key: str) -> None:
     lo, hi = config.DELAYS[key]
     time.sleep(random.uniform(lo, hi))
+
+
+def is_screen_awake() -> bool:
+    """Check if the device screen is on."""
+    out = _run(["shell", "dumpsys", "power"], capture=True).decode()
+    return "mWakefulness=Awake" in out
+
+
+def wake_screen() -> None:
+    """Turn the screen on if it's off."""
+    if not is_screen_awake():
+        _run(["shell", "input", "keyevent", "26"])
+        time.sleep(1.0)
+
+
+def launch_app(package: str) -> None:
+    """Launch an Android app by package name."""
+    _run(["shell", "monkey", "-p", package, "1"])
+    time.sleep(3.0)
+
+
+def go_home() -> None:
+    """Send the home key."""
+    _run(["shell", "input", "keyevent", "3"])
+    time.sleep(0.5)
+
+
+def turn_screen_off() -> None:
+    """Turn the screen off."""
+    _run(["shell", "input", "keyevent", "26"])
