@@ -98,8 +98,15 @@ def wake_screen() -> None:
         time.sleep(1.0)
 
 
+def force_stop_app(package: str) -> None:
+    """Force-stop the app so the next launch starts fresh."""
+    _run(["shell", "am", "force-stop", package])
+    time.sleep(0.5)
+
+
 def launch_app(package: str) -> None:
-    """Launch an Android app by package name."""
+    """Launch an Android app by package name. Force-stops first for a clean slate."""
+    force_stop_app(package)
     _run(["shell", "monkey", "-p", package, "1"])
     time.sleep(3.0)
 

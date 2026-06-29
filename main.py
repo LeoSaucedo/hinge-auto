@@ -413,8 +413,9 @@ def main() -> int:
 
     print(f"\nDone. {likes_sent} likes sent across {profiles_seen} profiles.")
 
-    # Cleanup: go home and turn screen off
-    adb.go_home()
+    # Cleanup: force-stop Hinge so next run starts fresh regardless of app state,
+    # then turn screen off.
+    adb.force_stop_app("co.hinge.app")
     adb.turn_screen_off()
     return 0
 
