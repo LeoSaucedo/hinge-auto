@@ -284,9 +284,6 @@ def main() -> int:
         print(f"Rotation '{args.rotate}': {rotation_list} (starting at "
               f"index {rotation_idx} = '{rotation_list[rotation_idx]}')")
 
-    print("Starting in 5s...")
-    time.sleep(5)
-
     # Wake screen and launch Hinge
     adb.wake_screen()
     adb.launch_app("co.hinge.app")

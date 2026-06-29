@@ -24,8 +24,8 @@ PRICING_TABLES: dict[str, dict[str, float]] = {
         "cache_read_input_tokens":     0.30,
     },
     "gemini": {
-        "input_tokens":   0.25,  # Gemini 3.1 Flash Lite
-        "output_tokens":  1.50,  # Gemini 3.1 Flash Lite
+        "input_tokens":   1.50,  # Gemini 3.5 Flash
+        "output_tokens":  9.00,  # Gemini 3.5 Flash
     },
 }
 
