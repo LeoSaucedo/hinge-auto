@@ -52,10 +52,9 @@ MAX_LIKES_PER_SESSION = 8
 MAX_PROFILES_PER_SESSION = 100
 
 # ---------- Emulator settings ----------
-# Pixel 10 (and recent Pixel models) are 1080x2424. Change if you're using
-# a different emulator profile — and re-run calibrate.py after any change.
-SCREEN_WIDTH = 1080
-SCREEN_HEIGHT = 2424
+# Moto e20 real phone is 720x1600. Change if using a different device.
+SCREEN_WIDTH = 720
+SCREEN_HEIGHT = 1600
 
 # Number of scroll-and-screenshot passes per profile.
 # Longer profiles (6 photos + 3 prompts) need ~7 frames at the scroll step
@@ -63,46 +62,41 @@ SCREEN_HEIGHT = 2424
 FRAMES_PER_PROFILE = 7
 
 # ---------- Coordinates ----------
-# Pixel 10 emulator defaults (1080x2424). These values are
-# accurate for the standard Pixel 10 AVD; if your screen is the same
-# resolution and Hinge's layout hasn't shifted, they'll work as-is. If
-# anything is off, run `python calibrate.py` to capture a screenshot and
-# update the values that don't match.
+# Calibrated for Moto e20 (720x1600) on 2026-06-28.
+# Run `python calibrate.py` to verify/adjust after any Hinge UI update.
 COORDS = {
     # Skip / like action targets (Discover screen, photo 1 at top)
-    "skip_button":       (134, 2068),   # X icon on prompt/photo card
-    "heart_photo_1":     (938, 1421),   # Heart icon on photo 1
+    "skip_button":       (89, 1319),   # X icon
+    "heart_photo_1":     (624, 1354),  # Heart icon
 
     # Compose box (anchors to the element whose heart was tapped; these
     # values are mostly fallbacks — vision.py re-finds them at tap-time
     # because the box shifts per profile).
-    "send_like_button":  (687, 1488),
-    "comment_input":     (540, 1317),
-    "compose_close":     (960, 200),
+    "send_like_button":  (463, 872),
+    "comment_input":     (333, 753),
+    "compose_close":     (650, 135),
 
     # Scroll gesture (swipe up = scroll down through profile).
-    "scroll_from":       (540, 1700),
-    "scroll_to":         (540, 700),
+    "scroll_from":       (360, 1125),
+    "scroll_to":         (360, 465),
     "scroll_duration_ms": 350,
 
     # Bottom nav (5 evenly-spaced icons across the bottom strip).
-    "nav_discover":      (108, 2270),
-    "nav_standouts":     (324, 2270),
-    "nav_likes_you":     (540, 2270),
-    "nav_matches":       (756, 2270),
-    "nav_self_pfp":      (972, 2270),
+    "nav_discover":      (72, 1498),
+    "nav_standouts":     (216, 1498),
+    "nav_likes_you":     (360, 1498),
+    "nav_matches":       (504, 1498),
+    "nav_self_pfp":      (648, 1498),
 
     # Self-profile flow (used by scan_self.py — "what does my profile
-    # look like to others"). From Discover: nav_self_pfp → self_avatar →
-    # view_tab gets you to a scrollable view of your own profile. Then
-    # back_arrow → back_arrow → nav_discover to return.
-    "self_avatar":       (540, 497),    # circle avatar on self tab
-    "view_tab":          (810, 310),    # 'View' tab on profile editor
-    "back_arrow":        (65, 200),     # top-left back arrow
+    # look like to others").
+    "self_avatar":       (360, 330),
+    "view_tab":          (540, 205),
+    "back_arrow":        (43, 135),
 
     # Discover filter row (tap the chip to open its bottom sheet).
-    "sliders_icon":      (95, 225),     # opens Dating Preferences
-    "age_chip":          (460, 225),    # opens Age filter sheet
+    "sliders_icon":      (64, 150),
+    "age_chip":          (307, 150),
 }
 
 # ---------- Timing ----------
@@ -119,6 +113,7 @@ DELAYS = {
 # "anthropic" -> uses your ANTHROPIC_API_KEY; best quality, ~$0.02-0.05/profile.
 # "ollama"    -> uses Ollama Cloud (free tier) or local Ollama; lower quality
 #                but no per-token cost.
+# "gemini"    -> uses Gemini via GEMINI_API_KEY; cheapest option.
 JUDGE_BACKEND = "anthropic"
 
 # ---------- Anthropic settings (when JUDGE_BACKEND == "anthropic") ----------
@@ -139,6 +134,12 @@ OLLAMA_MODEL = "qwen2.5-vl"
 #              "https://ollama.com" -> Ollama Cloud (requires OLLAMA_API_KEY)
 # Can also be set via the OLLAMA_HOST environment variable.
 OLLAMA_HOST = None
+
+# ---------- Gemini settings (when JUDGE_BACKEND == "gemini") ----------
+# GEMINI_API_KEY must be set in .env or environment.
+# Uses gemini-3.1-flash-lite by default (cheapest vision model). Override
+# via GEMINI_MODEL env var or edit the default below.
+GEMINI_MODEL = "gemini-3.1-flash-lite"
 
 # ---------- Paths ----------
 BASE_DIR = Path(__file__).parent

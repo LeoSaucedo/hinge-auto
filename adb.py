@@ -33,7 +33,10 @@ def screenshot() -> bytes:
     return _run(["exec-out", "screencap", "-p"], capture=True)
 
 
-def tap(x: int, y: int) -> None:
+def tap(x: int, y: int, jitter: int = 10) -> None:
+    """Tap at (x, y) with ±`jitter` px randomness."""
+    x += random.randint(-jitter, jitter)
+    y += random.randint(-jitter, jitter)
     _run(["shell", "input", "tap", str(x), str(y)])
 
 
@@ -56,14 +59,57 @@ def swipe(x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
 
 def scroll_down() -> None:
     c = config.COORDS
-    swipe(*c["scroll_from"], *c["scroll_to"], c["scroll_duration_ms"])
+    # Vary scroll distance 80-120% to avoid identical gestures
+    scale = random.uniform(0.8, 1.2)
+    sx = int(c["scroll_from"][0])
+    sy = int(c["scroll_from"][1])
+    ex = int(c["scroll_to"][0])
+    ey = int(c["scroll_to"][1])
+    dy = int((sy - ey) * scale)
+    swipe(sx, sy, sx, sy - dy, c["scroll_duration_ms"])
 
 
 def scroll_up() -> None:
     c = config.COORDS
-    swipe(*c["scroll_to"], *c["scroll_from"], c["scroll_duration_ms"])
+    scale = random.uniform(0.8, 1.2)
+    sx = int(c["scroll_to"][0])
+    sy = int(c["scroll_to"][1])
+    ex = int(c["scroll_from"][0])
+    ey = int(c["scroll_from"][1])
+    dy = int((ey - sy) * scale)
+    swipe(sx, sy, sx, sy + dy, c["scroll_duration_ms"])
 
 
 def jitter_sleep(key: str) -> None:
     lo, hi = config.DELAYS[key]
     time.sleep(random.uniform(lo, hi))
+
+
+def is_screen_awake() -> bool:
+    """Check if the device screen is on."""
+    out = _run(["shell", "dumpsys", "power"], capture=True).decode()
+    return "mWakefulness=Awake" in out
+
+
+def wake_screen() -> None:
+    """Turn the screen on if it's off."""
+    if not is_screen_awake():
+        _run(["shell", "input", "keyevent", "26"])
+        time.sleep(1.0)
+
+
+def launch_app(package: str) -> None:
+    """Launch an Android app by package name."""
+    _run(["shell", "monkey", "-p", package, "1"])
+    time.sleep(3.0)
+
+
+def go_home() -> None:
+    """Send the home key."""
+    _run(["shell", "input", "keyevent", "3"])
+    time.sleep(0.5)
+
+
+def turn_screen_off() -> None:
+    """Turn the screen off."""
+    _run(["shell", "input", "keyevent", "26"])
