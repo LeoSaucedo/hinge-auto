@@ -126,7 +126,10 @@ def do_like(message: str = "") -> None:
         raise RuntimeError("vision: couldn't find Send Like after heart tap")
     comment_xy = vision.find_comment_input(send_xy)
 
-    if message:
+    if config.DRY_RUN_MESSAGE and message:
+        print(f"DRY_RUN_MESSAGE: would send '{message}' — sending like without it.")
+
+    if message and not config.DRY_RUN_MESSAGE:
         adb.tap(*comment_xy)
         adb.jitter_sleep("after_tap")
         # Snapshot empty-field text-pixel baseline so we can detect when
@@ -249,6 +252,8 @@ def main() -> int:
     )
     print(f"Mode:     {config.MODE_NAME} ({age_band})")
     print(f"Run:      {'DRY RUN (no taps)' if config.DRY_RUN else 'LIVE (will tap)'}")
+    if config.DRY_RUN_MESSAGE:
+        print(f"Messages:  DRY RUN (generated but not sent)")
     print(f"Max likes: {config.MAX_LIKES_PER_SESSION}, "
           f"max profiles: {config.MAX_PROFILES_PER_SESSION}")
 

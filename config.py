@@ -8,9 +8,15 @@ The COORDS defaults below are calibrated for a Pixel 10 emulator
 (1080x2424). If that's what you're running and Hinge hasn't shifted
 its layout, they should work as-is. Otherwise run `python calibrate.py`
 and update the values that don't match your device.
+
+Any config variable can be overridden by setting it in `.env` — the env
+wins at import time.
 """
 
+import os
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 # ---------- Mode selection ----------
 # Which `modes/<name>.py` to load. Overridden per-run by `python main.py --mode X`.
@@ -41,6 +47,13 @@ PREMADES: list[dict] = []
 #     (MAX_LIKES_PER_SESSION = 5) and Ctrl-C if something looks off.
 DRY_RUN = False
 
+# DRY_RUN_MESSAGE = False -> send generated message with like (default)
+# DRY_RUN_MESSAGE = True  -> still like, still generate the message in the
+#                             judge, but skip typing it. The message is
+#                             logged in decision.txt so you can review it
+#                             without it going out to the profile.
+DRY_RUN_MESSAGE = False  # override via .env: DRY_RUN_MESSAGE=true
+
 # Default = 8, which matches free-tier Hinge's daily like cap (resets at
 # 4am local). One session per day exhausts the free allotment cleanly.
 #
@@ -48,7 +61,7 @@ DRY_RUN = False
 # run multiple sessions throughout the day. Going much higher per session
 # tends to trigger Hinge's soft-throttle (empty Discover after a burst);
 # spacing batches across the day works better than one giant batch.
-MAX_LIKES_PER_SESSION = 4
+MAX_LIKES_PER_SESSION = 2
 MAX_PROFILES_PER_SESSION = 100
 
 # ---------- Emulator settings ----------
@@ -146,6 +159,40 @@ BASE_DIR = Path(__file__).parent
 DEBUG_DIR = BASE_DIR / "debug"
 SCREENSHOTS_DIR = BASE_DIR / "screenshots"
 SAVE_DEBUG_FRAMES = True  # keep frames + decisions in debug/ for review
+
+
+# ---------- .env overrides ----------
+load_dotenv()
+
+
+def _apply_env_overrides() -> None:
+    """Override any config module variable from .env.
+
+    Add `KEY=VALUE` to .env and it'll override the matching config.py
+    variable at import time. Supports str, int, float, and bool types.
+    """
+    g = globals()
+    for key, val in os.environ.items():
+        current = g.get(key)
+        if current is None:
+            continue
+        if isinstance(current, bool):
+            g[key] = val.lower() in ("1", "true", "yes")
+        elif isinstance(current, int):
+            try:
+                g[key] = int(val)
+            except ValueError:
+                print(f"[config] env {key}={val!r}: not a valid int, skipped")
+        elif isinstance(current, float):
+            try:
+                g[key] = float(val)
+            except ValueError:
+                print(f"[config] env {key}={val!r}: not a valid float, skipped")
+        else:
+            g[key] = val
+
+
+_apply_env_overrides()
 
 
 def _apply_mode() -> None:
