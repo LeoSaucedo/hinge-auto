@@ -113,6 +113,11 @@ def do_like(message: str = "") -> None:
     adb.jitter_sleep("after_tap")
 
     send_xy = vision.find_send_like(adb.screenshot())
+    if send_xy is None and adb.dismiss_keyboard_if_visible():
+        # Hinge sometimes auto-focuses the comment field when the compose
+        # card opens, popping the keyboard and covering Send Like.
+        print("Keyboard was blocking initial Send Like — dismissed and retrying.")
+        send_xy = vision.find_send_like(adb.screenshot())
     if send_xy is None:
         # Same reasoning as the heart fallback above — silent fallback
         # masks a real failure and traps the loop. Skip instead.
