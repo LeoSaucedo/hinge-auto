@@ -49,7 +49,19 @@ def input_text(text: str) -> None:
     them) since `input text` itself only sends keyevents.
     """
     quoted = shlex.quote(text)
-    _run(["shell", f"input text {quoted}"])
+    try:
+        _run(["shell", f"input text {quoted}"])
+    except subprocess.CalledProcessError as e:
+        # Some devices/IME implementations crash `input text` with a
+        # NullPointerException (Moto e20 / Gboard). When this happens
+        # the keyboard is in a stuck state — dismiss it so the rest
+        # of the pipeline can recover.
+        print(f"adb: input_text failed (device IME crash) — dismissing"
+              f" keyboard\n    text={text!r}")
+        try:
+            _run(["shell", "input", "keyevent", "4"])
+        except subprocess.CalledProcessError:
+            pass
 
 
 def swipe(x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
