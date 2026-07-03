@@ -24,28 +24,37 @@ def _png_to_array(png: bytes) -> np.ndarray:
 
 
 def find_send_like(png: bytes) -> tuple[int, int] | None:
-    """Locate the peach 'Send Like' button. Returns (x, y) center or None."""
+    """Locate the 'Send Like' button. Returns (x, y) center or None.
+
+    Hinge changed the compose card button in late June 2026 — replaced
+    the filled peach button with a white button + pink 'Send Like' text
+    (RGB ~255, 159, 191). This finds the pink text blob and returns its
+    centroid as a proxy for the button position.
+    """
     arr = _png_to_array(png)
     r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-    peach = (
-        (r > 220) & (g > 190) & (g < 235) & (b > 170) & (b < 220)
-        & (r > g) & (g > b)
+    # Pink "Send Like" text: r ~255, g ~160, b ~190. r dominates.
+    pink = (
+        (r > 240) & (g > 140) & (g < 200) & (b > 170) & (b < 210)
+        & (r > g) & (r > b)
+        & ((r.astype(np.int32) - g.astype(np.int32)) > 40)
     )
-    labeled, _ = label(peach)
+    labeled, num = label(pink)
     candidates = []
-    for i, sl in enumerate(find_objects(labeled), 1):
-        if sl is None:
+    for i in range(1, num + 1):
+        sl = find_objects((labeled == i).astype(np.int32))
+        if sl is None or sl[0] is None:
             continue
-        y0, y1 = sl[0].start, sl[0].stop
-        x0, x1 = sl[1].start, sl[1].stop
+        y0, y1 = sl[0][0].start, sl[0][0].stop
+        x0, x1 = sl[0][1].start, sl[0][1].stop
         h, w = y1 - y0, x1 - x0
-        area = (labeled[sl] == i).sum()
-        if not (int(500 * _S) < w < int(700 * _S)
-                and int(80 * _S) < h < int(130 * _S)
-                and area > 30000 * _S * _S):
+        area = ((labeled == i).astype(np.int32))[sl[0]].sum()
+        # The text is ~25-30px tall; filter out noise.
+        if not (h > 15 and area > 30):
             continue
         cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
-        if cx <= int(500 * _S):
+        # Button text is in the right half of the compose card.
+        if cx < int(500 * _S):
             continue
         candidates.append((cy, cx))
     if not candidates:
