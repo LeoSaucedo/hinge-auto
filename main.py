@@ -84,6 +84,20 @@ def do_skip() -> None:
     adb.jitter_sleep("after_skip")
 
 
+def _dismiss_compose_card_if_visible() -> None:
+    """Tap the compose card close button if the card is showing.
+
+    After a failed do_like, the compose card may still be open, which
+    blocks find_first_heart on the next profile. Checks for the pink
+    Send Like text before tapping.
+    """
+    ss = adb.screenshot()
+    if vision.find_send_like(ss) is not None:
+        cx, cy = config.COORDS["compose_close"]
+        adb.tap(cx, cy)
+        adb.jitter_sleep("after_tap")
+
+
 def do_like(message: str = "") -> None:
     """In live mode: scroll to top, tap heart, type message (if any), tap Send Like.
     In dry run: advance by skipping (so we never send an actual like).
@@ -95,6 +109,10 @@ def do_like(message: str = "") -> None:
     if config.DRY_RUN:
         do_skip()
         return
+    # Try to close any leftover compose card from a previous failed
+    # like before proceeding. If the card is open, find_first_heart
+    # will fail and we'd skip the profile unnecessarily.
+    _dismiss_compose_card_if_visible()
     # Scroll back to the top before tapping a heart. The compose box
     # anchors to the tapped element and extends DOWNWARD — if we tap
     # a heart that's already low on screen (which it is after capture),
