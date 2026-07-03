@@ -119,22 +119,45 @@ def force_stop_app(package: str) -> None:
 def dismiss_keyboard_if_visible() -> bool:
     """Dismiss the soft keyboard if it's currently visible.
 
-    Uses dumpsys input_method to check mInputShown, then sends a single
-    KEYCODE_BACK only when the IME is confirmed visible. Safe to call
-    when the keyboard isn't up — does nothing and returns False.
+    Taps in the compose card header area (above the text field, below
+    the status bar) to dismiss the IME via focus loss. Avoids sending
+    KEYCODE_BACK, which on some Hinge versions / Android builds also
+    closes the compose card.
+
+    Safe to call when the keyboard isn't up — does nothing and returns False.
     """
     out = _run(["shell", "dumpsys", "input_method"], capture=True)
     if out and b"mInputShown=true" in out:
-        _run(["shell", "input", "keyevent", "4"])  # KEYCODE_BACK
-        time.sleep(0.3)
-        return True
+        # Tap just below the status bar, inside the app area, to
+        # dismiss the keyboard via tap-on-background. This is the
+        # compose card photo header area — tapping here causes
+        # focus loss on the text field without KEYCODE_BACK side effects.
+        _run(["shell", "input", "tap", "360", "200"])
+        time.sleep(0.8)
+        # Check if keyboard is actually gone
+        out2 = _run(["shell", "dumpsys", "input_method"], capture=True)
+        keyboard_still_visible = out2 and b"mInputShown=true" in out2
+        if keyboard_still_visible:
+            # If tap didn't work, try Android's internal IME hide
+            _run(["shell", "input", "keyevent", "111"])  # KEYCODE_ESCAPE
+            time.sleep(0.5)
+        return not keyboard_still_visible
     return False
 
 
-def launch_app(package: str) -> None:
-    """Launch an Android app by package name. Force-stops first for a clean slate."""
+def launch_app(package: str, activity: str = ".ui.AppActivity") -> None:
+    """Launch an Android app by package name. Force-stops first for a clean slate.
+
+    Uses `am start` instead of `monkey` because the latter can hang over
+    TCP / Tailscale ADB connections (subprocess.run waits forever).
+    Falls back to monkey if am start fails.
+    """
     force_stop_app(package)
-    _run(["shell", "monkey", "-p", package, "1"])
+    intent = f"{package}/{activity}"
+    try:
+        _run(["shell", "am", "start", "-n", intent])
+    except subprocess.CalledProcessError:
+        _run(["shell", "monkey", "-p", package, "1"])
     time.sleep(3.0)
 
 

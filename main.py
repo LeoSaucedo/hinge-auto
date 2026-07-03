@@ -105,6 +105,14 @@ def do_like(message: str = "") -> None:
     Send Like / comment input positions are found at tap-time via vision —
     the compose card anchors to whichever heart was tapped and shifts per
     profile, so static COORDS don't survive across profiles.
+
+    CRITICAL: When the compose card opens, Hinge auto-focuses the comment
+    input. Dismissing the keyboard causes the button bar to disappear
+    entirely (buttons only render when the input has focus or text). So:
+    - If there's a message: TYPE FIRST into the auto-focused input, THEN
+      find the active (pink) Send Like button.
+    - If no message: try to find the disabled (grey) Send Like button;
+      fall back to keyboard-dismiss + retry.
     """
     if config.DRY_RUN:
         do_skip()
@@ -120,67 +128,49 @@ def do_like(message: str = "") -> None:
     scroll_back_to_top()
     heart_xy = vision.find_first_heart(adb.screenshot())
     if heart_xy is None:
-        # Static fallback used to fire here, but it silently misses on
-        # profiles where the heart's real position differs from the
-        # calibrated coord (different layouts, partial scroll-back). The
-        # loop would then type/tap into the void and never advance,
-        # producing an infinite-loop on the same profile. Bail to skip
-        # instead so the profile advances and the loop survives.
         save_error_screenshot("heart-not-found")
         raise RuntimeError("vision: couldn't find photo-1 heart after scroll-back")
     adb.tap(*heart_xy)
     adb.jitter_sleep("after_tap")
 
-    send_xy = vision.find_send_like(adb.screenshot())
-    if send_xy is None and adb.dismiss_keyboard_if_visible():
-        # Hinge sometimes auto-focuses the comment field when the compose
-        # card opens, popping the keyboard and covering Send Like.
-        print("Keyboard was blocking initial Send Like — dismissed and retrying.")
-        send_xy = vision.find_send_like(adb.screenshot())
-    if send_xy is None:
-        # Same reasoning as the heart fallback above — silent fallback
-        # masks a real failure and traps the loop. Skip instead.
-        save_error_screenshot("send-like-not-found")
-        raise RuntimeError("vision: couldn't find Send Like after heart tap")
-    comment_xy = vision.find_comment_input(send_xy)
-
     if config.DRY_RUN_MESSAGE and message:
         print(f"DRY_RUN_MESSAGE: would send '{message}' — sending like without it.")
 
     if message and not config.DRY_RUN_MESSAGE:
-        adb.tap(*comment_xy)
-        adb.jitter_sleep("after_tap")
-        # Snapshot empty-field text-pixel baseline so we can detect when
-        # the typed text has actually landed in the EditText buffer.
-        empty_pixels = vision.comment_field_text_pixels(adb.screenshot(), send_xy)
+        # ---------- Message path: type first, then find pink Send Like ----------
+        # The comment input is auto-focused after heart tap. Don't dismiss
+        # the keyboard first — on the current Hinge version, that removes
+        # the button bar entirely. Type directly into the auto-focused field.
+        time.sleep(0.8)  # Let keyboard fully render
+
         adb.input_text(message)
-        # Poll for the field to fill. Under host CPU contention (e.g. a
-        # game running alongside the emulator) `input text` events can
-        # dispatch slower than expected — short fixed waits drop chars.
-        # Expected pixel count grows with message length; require we see
-        # well above the empty baseline before sending.
-        deadline = time.monotonic() + 15
-        target_pixels = empty_pixels + max(150, 20 * len(message))
-        while time.monotonic() < deadline:
-            time.sleep(1.0)
-            current = vision.comment_field_text_pixels(adb.screenshot(), send_xy)
-            if current >= target_pixels:
-                break
-        else:
-            print(f"WARN: typed text didn't reach expected pixel density "
-                  f"(have {current}, want {target_pixels}) — sending anyway.")
-        # Typed text can wrap to multiple lines, expanding the comment
-        # field and pushing Send Like down. Re-find against the post-type
-        # screen so the tap lands on the actual button position.
-        #
-        # If Send Like isn't visible, the keyboard may be covering it —
-        # safely dismiss the keyboard (only if confirmed visible) and retry.
-        post_type_xy = vision.find_send_like(adb.screenshot())
-        if post_type_xy is None and adb.dismiss_keyboard_if_visible():
+        time.sleep(1.5)  # Let text finish typing
+
+        # Dismiss keyboard — safe now because text was entered, so the Send
+        # Like button stays active (pink) even after losing focus.
+        adb.dismiss_keyboard_if_visible()
+        adb.jitter_sleep("after_tap")
+
+        # Find active (pink) Send Like. Re-find to handle Y shift from
+        # multi-line text wrapping.
+        send_xy = vision.find_send_like(adb.screenshot())
+        if send_xy is None:
+            save_error_screenshot("send-like-not-found")
+            raise RuntimeError("vision: couldn't find Send Like after typing message")
+    else:
+        # ---------- No-message path: find disabled/grey Send Like ----------
+        send_xy = vision.find_send_like(adb.screenshot())
+        if send_xy is None and adb.dismiss_keyboard_if_visible():
+            # Keyboard might be covering Send Like. Dismiss to check.
+            # The button is grey/disabled but should remain visible
+            # as long as the compose card stays open.
             print("Keyboard was blocking Send Like — dismissed and retrying.")
-            post_type_xy = vision.find_send_like(adb.screenshot())
-        if post_type_xy is not None:
-            send_xy = post_type_xy
+            save_error_screenshot("post-dismiss-send-like-search")
+            send_xy = vision.find_send_like(adb.screenshot())
+        if send_xy is None:
+            save_error_screenshot("send-like-not-found")
+            raise RuntimeError("vision: couldn't find Send Like after heart tap")
+
     adb.tap(*send_xy)
     adb.jitter_sleep("after_like_sent")
 

@@ -64,8 +64,8 @@ DRY_RUN_MESSAGE = False
 # SESSION_LIKE_MIN sets the floor for random jitter. Each session picks a
 # random cap between SESSION_LIKE_MIN and MAX_LIKES_PER_SESSION so the
 # like count varies per session — looks more human.
-MAX_LIKES_PER_SESSION = 8
-SESSION_LIKE_MIN = 0
+MAX_LIKES_PER_SESSION = 2
+SESSION_LIKE_MIN = 1
 MAX_PROFILES_PER_SESSION = 100
 
 # ---------- Emulator settings ----------
