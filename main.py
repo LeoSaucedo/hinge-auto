@@ -85,14 +85,24 @@ def do_skip() -> None:
 
 
 def _dismiss_compose_card_if_visible() -> None:
-    """Tap the compose card close button if the card is showing.
+    """Dismiss the compose card if it's showing.
 
-    After a failed do_like, the compose card may still be open, which
-    blocks find_first_heart on the next profile. Checks for the pink
-    Send Like text before tapping.
+    After a failed do_like, the compose card (possibly with keyboard still
+    visible) may be left on screen. This blocks find_first_heart on the
+    next profile. Checks for the compose card via:
+    1. find_send_like() — detects visible Send Like button (pink or grey)
+    2. Keyboard visibility — if the keyboard is up, the compose card is
+       likely open (Hinge only shows the keyboard during compose).
+       Dismiss keyboard first, then close the card.
     """
     ss = adb.screenshot()
-    if vision.find_send_like(ss) is not None:
+    card_visible = vision.find_send_like(ss) is not None
+    if not card_visible and adb.dismiss_keyboard_if_visible():
+        # Keyboard was covering the button bar. After dismiss, check again.
+        adb.jitter_sleep("after_tap")
+        ss = adb.screenshot()
+        card_visible = vision.find_send_like(ss) is not None
+    if card_visible:
         cx, cy = config.COORDS["compose_close"]
         adb.tap(cx, cy)
         adb.jitter_sleep("after_tap")
@@ -323,6 +333,13 @@ def main() -> int:
     while profiles_seen < config.MAX_PROFILES_PER_SESSION:
         profiles_seen += 1
         print(f"\n--- Profile {profiles_seen} ---")
+
+        # Dismiss any leftover compose card from a previous failed do_like
+        # before capturing. If the card is open (possibly with keyboard),
+        # capture_profile will grab frames of the keyboard overlay instead
+        # of the actual profile, making the judge skip everything as
+        # low_effort.
+        _dismiss_compose_card_if_visible()
 
         t0 = time.monotonic()
         frames = capture_profile()
