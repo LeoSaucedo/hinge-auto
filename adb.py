@@ -47,21 +47,17 @@ def input_text(text: str) -> None:
     device shell. Caller should keep text plain ASCII — emoji and the chars
     \\ " $ ` should be filtered upstream (the model is instructed to avoid
     them) since `input text` itself only sends keyevents.
+
+    NOTE: Do NOT send KEYCODE_BACK on failure — that closes the Hinge compose
+    card when typing fails (e.g., on some dark keyboard IMEs). The caller is
+    responsible for recovery.
     """
     quoted = shlex.quote(text)
     try:
         _run(["shell", f"input text {quoted}"])
     except subprocess.CalledProcessError as e:
-        # Some devices/IME implementations crash `input text` with a
-        # NullPointerException (Moto e20 / Gboard). When this happens
-        # the keyboard is in a stuck state — dismiss it so the rest
-        # of the pipeline can recover.
-        print(f"adb: input_text failed (device IME crash) — dismissing"
-              f" keyboard\n    text={text!r}")
-        try:
-            _run(["shell", "input", "keyevent", "4"])
-        except subprocess.CalledProcessError:
-            pass
+        print(f"adb: input_text failed (device IME crash)"
+              f" — text={text!r} err={e!r}")
 
 
 def swipe(x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:

@@ -114,21 +114,70 @@ def _find_grey_send_like(arr: np.ndarray) -> tuple[int, int] | None:
     return (cx, cy)
 
 
+def _find_teal_send_like(arr: np.ndarray) -> tuple[int, int] | None:
+    """Detect a teal/mint-green 'Send Like' pill button.
+
+    Hinge's UI may render the active Send Like in teal instead of pink
+    (e.g., when using a dark keyboard theme that changes the accent color).
+    Teal: r~120-140, g~190-210, b~180-200.
+    """
+    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+    # Teal button background (pill shape)
+    teal = (
+        (r > 100) & (r < 160)
+        & (g > 180) & (g < 220)
+        & (b > 160) & (b < 215)
+        & (g > r) & (b > r)
+        & (g - r > 50)
+    )
+    labeled, num = label(teal)
+    candidates = []
+    for i in range(1, num + 1):
+        sl = find_objects((labeled == i).astype(np.int32))
+        if sl is None or sl[0] is None:
+            continue
+        y0, y1 = sl[0][0].start, sl[0][0].stop
+        x0, x1 = sl[0][1].start, sl[0][1].stop
+        bh, bw = y1 - y0, x1 - x0
+        # The button is a pill shape: ~30-50px tall, ~80-200px wide
+        min_h, max_h = int(20 * _S), int(60 * _S)
+        min_w, max_w = int(60 * _S), int(250 * _S)
+        if not (min_h < bh < max_h and min_w < bw < max_w):
+            continue
+        area = ((labeled == i).astype(np.int32))[sl[0]].sum()
+        if area < int(500 * _S * _S):
+            continue
+        cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+        # Must be on the right side of screen
+        if cx < int(arr.shape[1] * 0.5):
+            continue
+        # Must be in the lower portion (compose card area)
+        if cy < int(arr.shape[0] * 0.55):
+            continue
+        candidates.append((cy, cx))
+    if not candidates:
+        return None
+    candidates.sort()
+    cy, cx = candidates[0]
+    return (cx, cy)
+
+
 def find_send_like(png: bytes) -> tuple[int, int] | None:
     """Locate the 'Send Like' button. Returns (x, y) center or None.
 
-    Tries two approaches in order:
-    1. Pink text detection (active/enabled button after typing)
-    2. Grey pill detection (disabled button when input field is empty)
+    Tries three approaches in order:
+    1. Pink text detection (active/enabled button after typing, pink accent)
+    2. Teal pill detection (active/enabled button, teal/mint accent)
+    3. Grey pill detection (disabled button when input field is empty)
 
-    The button may be disabled (grey) or active (pink text) depending on
-    whether the comment field has text.
+    The button color depends on the Hinge accent theme and state.
     """
     arr = _png_to_array(png)
-    result = _find_pink_send_like(arr)
-    if result is not None:
-        return result
-    return _find_grey_send_like(arr)
+    for detector in [_find_pink_send_like, _find_teal_send_like, _find_grey_send_like]:
+        result = detector(arr)
+        if result is not None:
+            return result
+    return None
 
 
 def find_first_heart(png: bytes) -> tuple[int, int] | None:

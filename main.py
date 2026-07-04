@@ -147,23 +147,54 @@ def do_like(message: str = "") -> None:
         print(f"DRY_RUN_MESSAGE: would send '{message}' — sending like without it.")
 
     if message and not config.DRY_RUN_MESSAGE:
-        # ---------- Message path: type first, then find pink Send Like ----------
-        # The comment input is auto-focused after heart tap. Don't dismiss
-        # the keyboard first — on the current Hinge version, that removes
-        # the button bar entirely. Type directly into the auto-focused field.
-        time.sleep(0.8)  # Let keyboard fully render
+        # ---------- Message path: type first, then find Send Like ----------
+        # The compose card is open with the keyboard visible. ADB input_text
+        # may fail on some IMEs (dark keyboard themes); before typing, tap
+        # the comment input field to ensure it's focused.
+        time.sleep(0.5)  # Let keyboard render
+
+        # Estimate where the comment input is and tap to focus it.
+        # The compose card's input field is roughly in the center of the
+        # visible card area. We don't have send_xy yet, so use the card's
+        # visual structure to estimate.
+        ss = adb.screenshot()
+        est_send_y = vision.estimate_send_y(ss)
+        comment_xy = vision.find_comment_input((config.SCREEN_WIDTH // 2, est_send_y))
+        adb.tap(*comment_xy)
+        adb.jitter_sleep("after_tap")
+
+        # Take a baseline of the empty input area for text verification
+        empty_pixels = vision.comment_text_pixels(adb.screenshot(), est_send_y)
 
         adb.input_text(message)
-        time.sleep(1.5)  # Let text finish typing
 
-        # Dismiss keyboard — safe now because text was entered, so the Send
-        # Like button stays active (pink) even after losing focus.
+        # Poll for text to appear in the input field
+        deadline = time.monotonic() + 15
+        target_pixels = empty_pixels + max(150, 20 * len(message))
+        while time.monotonic() < deadline:
+            time.sleep(1.0)
+            current = vision.comment_text_pixels(adb.screenshot(), est_send_y)
+            if current >= target_pixels:
+                break
+        else:
+            print(f"WARN: typed text didn't reach expected pixel density "
+                  f"(have {current}, want {target_pixels}) — sending anyway.")
+
+        # Dismiss keyboard — safe now because text was entered (if typing
+        # succeeded), so the Send Like button stays active even after
+        # losing focus. Use KEYCODE_ESCAPE to avoid compose card close.
         adb.dismiss_keyboard_if_visible()
         adb.jitter_sleep("after_tap")
 
-        # Find active (pink) Send Like. Re-find to handle Y shift from
-        # multi-line text wrapping.
+        # Find the active Send Like button. Re-find to handle Y shift
+        # from multi-line text wrapping.
         send_xy = vision.find_send_like(adb.screenshot())
+        if send_xy is None:
+            # If keyboard is still up, try dismissing it
+            adb.dismiss_keyboard_if_visible()
+            adb.jitter_sleep("after_tap")
+            send_xy = vision.find_send_like(adb.screenshot())
+
         if send_xy is None:
             save_error_screenshot("send-like-not-found")
             raise RuntimeError("vision: couldn't find Send Like after typing message")
