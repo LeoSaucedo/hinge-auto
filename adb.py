@@ -115,29 +115,29 @@ def force_stop_app(package: str) -> None:
 def dismiss_keyboard_if_visible() -> bool:
     """Dismiss the soft keyboard if it's currently visible.
 
-    Taps in the compose card header area (above the text field, below
-    the status bar) to dismiss the IME via focus loss. Avoids sending
-    KEYCODE_BACK, which on some Hinge versions / Android builds also
-    closes the compose card.
+    Uses KEYCODE_ESCAPE (keyevent 111) which tells the Android
+    InputMethodManager to hide the IME window WITHOUT causing the
+    focused input field to lose focus. This is critical for Hinge:
+    when the input field loses focus (from a tap-on-background), the
+    compose card removes the button bar entirely.
+
+    Avoids KEYCODE_BACK (keyevent 4) — that closes the compose card.
+    Avoids tap-on-background — that causes focus loss and button bar
+    disappearance.
 
     Safe to call when the keyboard isn't up — does nothing and returns False.
     """
     out = _run(["shell", "dumpsys", "input_method"], capture=True)
     if out and b"mInputShown=true" in out:
-        # Tap just below the status bar, inside the app area, to
-        # dismiss the keyboard via tap-on-background. This is the
-        # compose card photo header area — tapping here causes
-        # focus loss on the text field without KEYCODE_BACK side effects.
-        _run(["shell", "input", "tap", "360", "200"])
+        _run(["shell", "input", "keyevent", "111"])  # KEYCODE_ESCAPE
         time.sleep(0.8)
-        # Check if keyboard is actually gone
         out2 = _run(["shell", "dumpsys", "input_method"], capture=True)
-        keyboard_still_visible = out2 and b"mInputShown=true" in out2
-        if keyboard_still_visible:
-            # If tap didn't work, try Android's internal IME hide
-            _run(["shell", "input", "keyevent", "111"])  # KEYCODE_ESCAPE
+        keyboard_gone = not (out2 and b"mInputShown=true" in out2)
+        if not keyboard_gone:
+            # Fallback: try a second time
+            _run(["shell", "input", "keyevent", "111"])
             time.sleep(0.5)
-        return not keyboard_still_visible
+        return keyboard_gone
     return False
 
 

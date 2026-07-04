@@ -143,74 +143,49 @@ def do_like(message: str = "") -> None:
     adb.tap(*heart_xy)
     adb.jitter_sleep("after_tap")
 
+    send_xy = vision.find_send_like(adb.screenshot())
+    if send_xy is None and adb.dismiss_keyboard_if_visible():
+        # Keyboard was covering Send Like. KEYCODE_ESCAPE hides the IME
+        # without losing focus on the input field — the button bar stays
+        # visible (grey/disabled) and detectable.
+        print("Keyboard was blocking Send Like — dismissed and retrying.")
+        save_error_screenshot("post-dismiss-send-like-search")
+        send_xy = vision.find_send_like(adb.screenshot())
+    if send_xy is None:
+        # Button not found even after dismiss. This means either the
+        # compose card isn't open (previous error cascaded) or Hinge
+        # changed the button color/position beyond our detectors.
+        save_error_screenshot("send-like-not-found")
+        raise RuntimeError("vision: couldn't find Send Like after heart tap")
+    comment_xy = vision.find_comment_input(send_xy)
+
     if config.DRY_RUN_MESSAGE and message:
         print(f"DRY_RUN_MESSAGE: would send '{message}' — sending like without it.")
 
     if message and not config.DRY_RUN_MESSAGE:
-        # ---------- Message path: type first, then find Send Like ----------
-        # The compose card is open with the keyboard visible. ADB input_text
-        # may fail on some IMEs (dark keyboard themes); before typing, tap
-        # the comment input field to ensure it's focused.
-        time.sleep(0.5)  # Let keyboard render
-
-        # Estimate where the comment input is and tap to focus it.
-        # The compose card's input field is roughly in the center of the
-        # visible card area. We don't have send_xy yet, so use the card's
-        # visual structure to estimate.
-        ss = adb.screenshot()
-        est_send_y = vision.estimate_send_y(ss)
-        comment_xy = vision.find_comment_input((config.SCREEN_WIDTH // 2, est_send_y))
         adb.tap(*comment_xy)
         adb.jitter_sleep("after_tap")
-
-        # Take a baseline of the empty input area for text verification
-        empty_pixels = vision.comment_text_pixels(adb.screenshot(), est_send_y)
-
+        # Snapshot empty-field text-pixel baseline so we can detect when
+        # the typed text has actually landed in the EditText buffer.
+        empty_pixels = vision.comment_field_text_pixels(adb.screenshot(), send_xy)
         adb.input_text(message)
-
-        # Poll for text to appear in the input field
+        # Poll for the field to fill.
         deadline = time.monotonic() + 15
         target_pixels = empty_pixels + max(150, 20 * len(message))
         while time.monotonic() < deadline:
             time.sleep(1.0)
-            current = vision.comment_text_pixels(adb.screenshot(), est_send_y)
+            current = vision.comment_field_text_pixels(adb.screenshot(), send_xy)
             if current >= target_pixels:
                 break
         else:
             print(f"WARN: typed text didn't reach expected pixel density "
                   f"(have {current}, want {target_pixels}) — sending anyway.")
-
-        # Dismiss keyboard — safe now because text was entered (if typing
-        # succeeded), so the Send Like button stays active even after
-        # losing focus. Use KEYCODE_ESCAPE to avoid compose card close.
-        adb.dismiss_keyboard_if_visible()
-        adb.jitter_sleep("after_tap")
-
-        # Find the active Send Like button. Re-find to handle Y shift
-        # from multi-line text wrapping.
-        send_xy = vision.find_send_like(adb.screenshot())
-        if send_xy is None:
-            # If keyboard is still up, try dismissing it
-            adb.dismiss_keyboard_if_visible()
-            adb.jitter_sleep("after_tap")
-            send_xy = vision.find_send_like(adb.screenshot())
-
-        if send_xy is None:
-            save_error_screenshot("send-like-not-found")
-            raise RuntimeError("vision: couldn't find Send Like after typing message")
-    else:
-        # ---------- No-message path: find disabled/grey Send Like ----------
-        send_xy = vision.find_send_like(adb.screenshot())
-        if send_xy is None and adb.dismiss_keyboard_if_visible():
-            # Keyboard might be covering Send Like. Dismiss to check.
-            # The button is grey/disabled but should remain visible
-            # as long as the compose card stays open.
-            print("Keyboard was blocking Send Like — dismissed and retrying.")
-            save_error_screenshot("post-dismiss-send-like-search")
-            send_xy = vision.find_send_like(adb.screenshot())
-        if send_xy is None:
-            save_error_screenshot("send-like-not-found")
-            raise RuntimeError("vision: couldn't find Send Like after heart tap")
+        # Typed text can wrap to multiple lines, expanding the comment
+        # field and pushing Send Like down. Re-find against the post-type
+        # screen so the tap lands on the actual button position.
+        post_type_xy = vision.find_send_like(adb.screenshot())
+        if post_type_xy is not None:
+            send_xy = post_type_xy
 
     adb.tap(*send_xy)
     adb.jitter_sleep("after_like_sent")
