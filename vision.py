@@ -28,18 +28,21 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
 
     Hinge changed the compose card button in late June 2026 — replaced
     the filled peach button with a white button + pink 'Send Like' text
-    (RGB ~255, 159, 191). This finds the pink text blob and returns its
-    centroid as a proxy for the button position.
+    (RGB ~255, 159, 191). As of early July 2026 the button is back to
+    a filled warm peach color (RGB ~238, 225, 219). This finds the
+    peach blob and returns its centroid as a proxy for the button
+    position.
     """
     arr = _png_to_array(png)
     r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-    # Pink "Send Like" text: r ~255, g ~160, b ~190. r dominates.
-    pink = (
-        (r > 240) & (g > 140) & (g < 200) & (b > 170) & (b < 210)
-        & (r > g) & (r > b)
-        & ((r.astype(np.int32) - g.astype(np.int32)) > 40)
+    # Peach filled button: r ~238, g ~225, b ~219. r > g > b, light/muted.
+    peach = (
+        (r > 225) & (r < 250)
+        & (g > 210) & (g < 240)
+        & (b > 205) & (b < 230)
+        & (r > g) & (g > b)
     )
-    labeled, num = label(pink)
+    labeled, num = label(peach)
     candidates = []
     for i in range(1, num + 1):
         sl = find_objects((labeled == i).astype(np.int32))
@@ -49,11 +52,11 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
         x0, x1 = sl[0][1].start, sl[0][1].stop
         h, w = y1 - y0, x1 - x0
         area = ((labeled == i).astype(np.int32))[sl[0]].sum()
-        # The text is ~25-30px tall; filter out noise.
-        if not (h > 15 and area > 30):
+        # Button is larger than text; use button-sized filter.
+        if not (h > 30 and area > 500):
             continue
         cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
-        # Button text is in the right half of the compose card.
+        # Button is in the right half of the compose card.
         if cx < int(500 * _S):
             continue
         candidates.append((cy, cx))
