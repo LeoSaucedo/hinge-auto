@@ -138,10 +138,11 @@ def do_like(message: str = "") -> None:
         print("Keyboard was blocking initial Send Like — dismissed and retrying.")
         send_xy = vision.find_send_like(adb.screenshot())
     if send_xy is None:
-        # Same reasoning as the heart fallback above — silent fallback
-        # masks a real failure and traps the loop. Skip instead.
-        save_error_screenshot("send-like-not-found")
-        raise RuntimeError("vision: couldn't find Send Like after heart tap")
+        # Fall back to static coordinate — vision color detection is
+        # fragile when Hinge tweaks button styles. The compose card
+        # is already open and stays visible after keyboard dismiss.
+        send_xy = config.COORDS["send_like_button"]
+        print(f"Vision couldn't find Send Like — falling back to static coord {send_xy}")
     comment_xy = vision.find_comment_input(send_xy)
 
     if config.DRY_RUN_MESSAGE and message:
