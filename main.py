@@ -71,9 +71,11 @@ def scroll_back_to_top(swipes: int | None = None) -> None:
     """
     if swipes is None:
         swipes = config.FRAMES_PER_PROFILE * 2 + 4
+    print(f"Scrolling back to top ({swipes} swipes)...")
     for _ in range(swipes):
         adb.scroll_up()
         adb.jitter_sleep("after_scroll")
+    print(f"Scrolling stopped — at top of profile.")
 
 
 def do_skip() -> None:
@@ -128,15 +130,20 @@ def do_like(message: str = "") -> None:
         # instead so the profile advances and the loop survives.
         save_error_screenshot("heart-not-found")
         raise RuntimeError("vision: couldn't find photo-1 heart after scroll-back")
+    print(f"Vision found first heart at {heart_xy}")
     adb.tap(*heart_xy)
     adb.jitter_sleep("after_tap")
 
     send_xy = vision.find_send_like(adb.screenshot())
+    if send_xy is not None:
+        print(f"Vision found Send Like at {send_xy}")
     if send_xy is None and adb.dismiss_keyboard_if_visible():
         # Hinge sometimes auto-focuses the comment field when the compose
         # card opens, popping the keyboard and covering Send Like.
         print("Keyboard was blocking initial Send Like — dismissed and retrying.")
         send_xy = vision.find_send_like(adb.screenshot())
+        if send_xy is not None:
+            print(f"Vision found Send Like at {send_xy} (after keyboard dismiss)")
     if send_xy is None:
         # Fall back to static coordinate — vision color detection is
         # fragile when Hinge tweaks button styles. The compose card
@@ -177,11 +184,16 @@ def do_like(message: str = "") -> None:
         # If Send Like isn't visible, the keyboard may be covering it —
         # safely dismiss the keyboard (only if confirmed visible) and retry.
         post_type_xy = vision.find_send_like(adb.screenshot())
+        if post_type_xy is not None:
+            print(f"Vision found Send Like at {post_type_xy} (post-type)")
         if post_type_xy is None and adb.dismiss_keyboard_if_visible():
             print("Keyboard was blocking Send Like — dismissed and retrying.")
             post_type_xy = vision.find_send_like(adb.screenshot())
+            if post_type_xy is not None:
+                print(f"Vision found Send Like at {post_type_xy} (post-type, after keyboard dismiss)")
         if post_type_xy is not None:
             send_xy = post_type_xy
+    print(f"Tapping Send Like at {send_xy} — sending like! 🎯")
     adb.tap(*send_xy)
     adb.jitter_sleep("after_like_sent")
 
