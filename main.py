@@ -197,6 +197,12 @@ def do_like(message: str = "") -> None:
     adb.tap(*send_xy)
     adb.jitter_sleep("after_like_sent")
 
+    # After sending, the keyboard may still be open (especially if we typed
+    # a message). Dismiss it so it doesn't carry over to the next profile
+    # and block heart / Send Like detection.
+    if adb.dismiss_keyboard_if_visible():
+        print("Keyboard was still open after like — dismissed.")
+
 
 def save_error_screenshot(context: str) -> None:
     """Capture the current screen and save to debug/errors/ for post-mortem."""
