@@ -177,22 +177,20 @@ def do_like(message: str = "") -> None:
         else:
             print(f"WARN: typed text didn't reach expected pixel density "
                   f"(have {current}, want {target_pixels}) — sending anyway.")
+        # Dismiss keyboard right after typing completes. The compose
+        # card's button bar stays visible when we use KEYCODE_BACK
+        # here (unlike in the initial detection above) because the
+        # comment field has actual text content — Hinge won't close.
+        adb.dismiss_keyboard_if_visible()
         # Typed text can wrap to multiple lines, expanding the comment
         # field and pushing Send Like down. Re-find against the post-type
         # screen so the tap lands on the actual button position.
-        #
-        # If Send Like isn't visible, the keyboard may be covering it —
-        # safely dismiss the keyboard (only if confirmed visible) and retry.
         post_type_xy = vision.find_send_like(adb.screenshot())
         if post_type_xy is not None:
             print(f"Vision found Send Like at {post_type_xy} (post-type)")
-        if post_type_xy is None and adb.dismiss_keyboard_if_visible():
-            print("Keyboard was blocking Send Like — dismissed and retrying.")
-            post_type_xy = vision.find_send_like(adb.screenshot())
-            if post_type_xy is not None:
-                print(f"Vision found Send Like at {post_type_xy} (post-type, after keyboard dismiss)")
-        if post_type_xy is not None:
             send_xy = post_type_xy
+        else:
+            print("WARN: post-type Send Like not found — keyboard was already dismissed, using pre-type coord.")
     print(f"Tapping Send Like at {send_xy} — sending like! 🎯")
     adb.tap(*send_xy)
     adb.jitter_sleep("after_like_sent")
