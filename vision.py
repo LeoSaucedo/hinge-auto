@@ -70,37 +70,95 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
 def find_first_heart(png: bytes) -> tuple[int, int] | None:
     """Locate the heart icon on photo 1 (topmost heart in current view).
 
-    July 2026: Hinge changed from black-on-white to white (#FFFEFD) heart
-    on black (#1A1A1A) circle. Mask detects either design.
+    Three-tier detection (tried in order):
+      1. Quick 5x5 kernel check at the calibrated static coordinate — if
+         the majority of sampled pixels are the new dark-circle button
+         color (#1A1A1A), return the static coord directly.
+      2. Broader blob search in the right half of the screen for a dark
+         circular button. Uses relaxed width/area filters (height is
+         lenient because adjacent dark content can merge in the mask).
+      3. Lenient dark-circle blob search — same mask as tier 2 but with
+         minimal constraints. Casts the widest net as a last resort.
     """
     arr = _png_to_array(png)
+    scr_h, scr_w = arr.shape[:2]
     r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-    # Old design: black heart embedded in a white circular background
-    old_mask = (r > 235) & (g > 235) & (b > 235)
-    # New design: white heart (#FFFEFD) on black (#1A1A1A) circle
-    new_mask = (r < 60) & (g < 60) & (b < 60)
-    mask = old_mask | new_mask
-    labeled, _ = label(mask)
+
+    # ---- 1. Quick static-coord check ----
+    sx, sy = config.COORDS["heart_photo_1"]
+    r_patch = r[sy-2:sy+3, sx-2:sx+3]
+    g_patch = g[sy-2:sy+3, sx-2:sx+3]
+    b_patch = b[sy-2:sy+3, sx-2:sx+3]
+    dark_patch = (r_patch < 60) & (g_patch < 60) & (b_patch < 60)
+    if dark_patch.sum() >= 15:
+        return (sx, sy)
+
+    # ---- 2. Broader blob search for dark-circle button ----
+    dark = (r < 60) & (g < 60) & (b < 60)
+    labeled, _ = label(dark)
     hearts = []
     for i, sl in enumerate(find_objects(labeled), 1):
         if sl is None:
             continue
         y0, y1 = sl[0].start, sl[0].stop
         x0, x1 = sl[1].start, sl[1].stop
-        h, w = y1 - y0, x1 - x0
+        blob_h, blob_w = y1 - y0, x1 - x0
         area = (labeled[sl] == i).sum()
-        if not (int(100 * _S) < h < int(140 * _S)
-                and int(100 * _S) < w < int(140 * _S)):
-            continue
-        if abs(w - h) >= 15:
-            continue
-        if area < int(8500 * _S * _S) or area > int(12000 * _S * _S):
-            continue
         cx = (x0 + x1) // 2
-        if cx <= int(800 * _S):
-            continue
         cy = (y0 + y1) // 2
+        # Width must be button-sized; height is lenient (adjacent dark
+        # content — text, photo shadows — can merge vertically in the
+        # dark mask, inflating the blob).
+        if not (int(65 * _S) < blob_w < int(140 * _S)):
+            continue
+        if blob_h < int(55 * _S):
+            continue
+        # Must be on the right side of the screen
+        if cx <= int(scr_w * 0.58):
+            continue
+        # Y zone: lower half of screen (below photo, above nav bar)
+        frac_y = cy / scr_h
+        if not (0.38 < frac_y < 0.85):
+            continue
+        # Area filtering; upper bound is generous to tolerate merging
+        if area < int(2500 * _S * _S) or area > int(16000 * _S * _S):
+            continue
         hearts.append((cy, cx))
+
+    if hearts:
+        hearts.sort()
+        cy, cx = hearts[0]
+        return (cx, cy)
+
+    # ---- 3. Lenient dark-circle fallback with minimal constraints ----
+    # If tier 2 didn't find anything, cast the widest net: nearly any
+    # dark blob on the right side with a reasonable area.
+    for i, sl in enumerate(find_objects(labeled), 1):
+        if sl is None:
+            continue
+        y0, y1 = sl[0].start, sl[0].stop
+        x0, x1 = sl[1].start, sl[1].stop
+        blob_h, blob_w = y1 - y0, x1 - x0
+        area = (labeled[sl] == i).sum()
+        cx = (x0 + x1) // 2
+        cy = (y0 + y1) // 2
+        # Any dark blob on the right side, roughly button- or larger-sized
+        if blob_w < int(50 * _S) or blob_h < int(40 * _S):
+            continue
+        if cx <= int(scr_w * 0.55):
+            continue
+        frac_y = cy / scr_h
+        if not (0.30 < frac_y < 0.90):
+            continue
+        if area < int(2000 * _S * _S) or area > int(25000 * _S * _S):
+            continue
+        # Reject sparse blobs (text shadows, scattered dark pixels).
+        # The real heart-circle fill ratio is ~0.55+; false positives <0.35.
+        fill = area / (blob_w * blob_h)
+        if fill < 0.35:
+            continue
+        hearts.append((cy, cx))
+
     if not hearts:
         return None
     hearts.sort()
