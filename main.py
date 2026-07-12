@@ -129,6 +129,7 @@ def do_like(message: str = "") -> None:
         save_error_screenshot("heart-not-found")
         print(f"Vision couldn't find heart — falling back to static coord {heart_xy}")
     print(f"Vision found first heart at {heart_xy}")
+    print(f"Clicking heart at {heart_xy}")
     adb.tap(*heart_xy)
     adb.jitter_sleep("after_tap")
 
