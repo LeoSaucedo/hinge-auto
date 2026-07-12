@@ -152,6 +152,11 @@ def find_first_heart(png: bytes) -> tuple[int, int] | None:
             continue
         if area < int(2000 * _S * _S) or area > int(25000 * _S * _S):
             continue
+        # Reject sparse blobs (text shadows, scattered dark pixels).
+        # The real heart-circle fill ratio is ~0.55+; false positives <0.35.
+        fill = area / (blob_w * blob_h)
+        if fill < 0.35:
+            continue
         hearts.append((cy, cx))
 
     if not hearts:
