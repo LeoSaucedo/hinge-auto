@@ -84,7 +84,7 @@ FRAMES_PER_PROFILE = 7
 COORDS = {
     # Skip / like action targets (Discover screen, photo 1 at top)
     "skip_button":       (89, 1319),   # X icon
-    "heart_photo_1":     (624, 1354),  # Heart icon
+    "heart_photo_1":     (624, 897),   # Heart icon (white heart on black bg, July 2026)
 
     # Compose box (anchors to the element whose heart was tapped; these
     # values are mostly fallbacks — vision.py re-finds them at tap-time
