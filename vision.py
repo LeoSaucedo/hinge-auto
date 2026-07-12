@@ -77,8 +77,8 @@ def find_first_heart(png: bytes) -> tuple[int, int] | None:
       2. Broader blob search in the right half of the screen for a dark
          circular button. Uses relaxed width/area filters (height is
          lenient because adjacent dark content can merge in the mask).
-      3. Old-design white-circle blob detection (black heart on white
-         circular background).
+      3. Lenient dark-circle blob search — same mask as tier 2 but with
+         minimal constraints. Casts the widest net as a last resort.
     """
     arr = _png_to_array(png)
     scr_h, scr_w = arr.shape[:2]
@@ -130,28 +130,30 @@ def find_first_heart(png: bytes) -> tuple[int, int] | None:
         cy, cx = hearts[0]
         return (cx, cy)
 
-    # ---- 3. Old-design white-circle fallback ----
-    white = (r > 235) & (g > 235) & (b > 235)
-    labeled_w, _ = label(white)
-    for i, sl in enumerate(find_objects(labeled_w), 1):
+    # ---- 3. Lenient dark-circle fallback with minimal constraints ----
+    # If tier 2 didn't find anything, cast the widest net: nearly any
+    # dark blob on the right side with a reasonable area.
+    for i, sl in enumerate(find_objects(labeled), 1):
         if sl is None:
             continue
         y0, y1 = sl[0].start, sl[0].stop
         x0, x1 = sl[1].start, sl[1].stop
         blob_h, blob_w = y1 - y0, x1 - x0
-        area = (labeled_w[sl] == i).sum()
-        if not (int(100 * _S) < blob_h < int(140 * _S)
-                and int(100 * _S) < blob_w < int(140 * _S)):
-            continue
-        if abs(blob_w - blob_h) >= 15:
-            continue
-        if area < int(8500 * _S * _S) or area > int(12000 * _S * _S):
-            continue
+        area = (labeled[sl] == i).sum()
         cx = (x0 + x1) // 2
-        if cx <= int(800 * _S):
-            continue
         cy = (y0 + y1) // 2
+        # Any dark blob on the right side, roughly button- or larger-sized
+        if blob_w < int(50 * _S) or blob_h < int(40 * _S):
+            continue
+        if cx <= int(scr_w * 0.55):
+            continue
+        frac_y = cy / scr_h
+        if not (0.30 < frac_y < 0.90):
+            continue
+        if area < int(2000 * _S * _S) or area > int(25000 * _S * _S):
+            continue
         hearts.append((cy, cx))
+
     if not hearts:
         return None
     hearts.sort()
