@@ -70,42 +70,80 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
 def find_first_heart(png: bytes) -> tuple[int, int] | None:
     """Locate the heart icon on photo 1 (topmost heart in current view).
 
-    Verifies that the dark circle of the new white-on-black heart design
-    (July 2026) is actually at the expected position before returning it.
-    Falls back to None if the position doesn't look like it has the dark
-    circle background — caller uses the static coordinate instead.
+    Three-tier detection (tried in order):
+      1. Quick 5x5 kernel check at the calibrated static coordinate — if
+         the majority of sampled pixels are the new dark-circle button
+         color (#1A1A1A), return the static coord directly.
+      2. Broader blob search in the right half of the screen for a dark
+         circular button. Uses relaxed width/area filters (height is
+         lenient because adjacent dark content can merge in the mask).
+      3. Old-design white-circle blob detection (black heart on white
+         circular background).
     """
     arr = _png_to_array(png)
+    scr_h, scr_w = arr.shape[:2]
     r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
 
-    # Check the expected heart position: dark circle (#1A1A1A = ~26,26,26)
-    # at bottom-right of the action row. Sample a 5x5 kernel around the
-    # static coordinate — if the majority of pixels are the dark button
-    # color, the heart is present and the coord is likely valid.
-    cx, cy = config.COORDS["heart_photo_1"]
-    r_patch = r[cy-2:cy+3, cx-2:cx+3]
-    g_patch = g[cy-2:cy+3, cx-2:cx+3]
-    b_patch = b[cy-2:cy+3, cx-2:cx+3]
-    dark = (r_patch < 60) & (g_patch < 60) & (b_patch < 60)
-    if dark.sum() >= 15:  # at least 15/25 pixels are dark circle
-        return (cx, cy)
+    # ---- 1. Quick static-coord check ----
+    sx, sy = config.COORDS["heart_photo_1"]
+    r_patch = r[sy-2:sy+3, sx-2:sx+3]
+    g_patch = g[sy-2:sy+3, sx-2:sx+3]
+    b_patch = b[sy-2:sy+3, sx-2:sx+3]
+    dark_patch = (r_patch < 60) & (g_patch < 60) & (b_patch < 60)
+    if dark_patch.sum() >= 15:
+        return (sx, sy)
 
-    # The new dark button isn't where expected. Try the old white-circle
-    # design as a fallback (black heart on white circular background).
-    mask = (r > 235) & (g > 235) & (b > 235)
-    labeled, _ = label(mask)
+    # ---- 2. Broader blob search for dark-circle button ----
+    dark = (r < 60) & (g < 60) & (b < 60)
+    labeled, _ = label(dark)
     hearts = []
     for i, sl in enumerate(find_objects(labeled), 1):
         if sl is None:
             continue
         y0, y1 = sl[0].start, sl[0].stop
         x0, x1 = sl[1].start, sl[1].stop
-        h, w = y1 - y0, x1 - x0
+        blob_h, blob_w = y1 - y0, x1 - x0
         area = (labeled[sl] == i).sum()
-        if not (int(100 * _S) < h < int(140 * _S)
-                and int(100 * _S) < w < int(140 * _S)):
+        cx = (x0 + x1) // 2
+        cy = (y0 + y1) // 2
+        # Width must be button-sized; height is lenient (adjacent dark
+        # content — text, photo shadows — can merge vertically in the
+        # dark mask, inflating the blob).
+        if not (int(65 * _S) < blob_w < int(140 * _S)):
             continue
-        if abs(w - h) >= 15:
+        if blob_h < int(55 * _S):
+            continue
+        # Must be on the right side of the screen
+        if cx <= int(scr_w * 0.58):
+            continue
+        # Y zone: lower half of screen (below photo, above nav bar)
+        frac_y = cy / scr_h
+        if not (0.38 < frac_y < 0.85):
+            continue
+        # Area filtering; upper bound is generous to tolerate merging
+        if area < int(2500 * _S * _S) or area > int(16000 * _S * _S):
+            continue
+        hearts.append((cy, cx))
+
+    if hearts:
+        hearts.sort()
+        cy, cx = hearts[0]
+        return (cx, cy)
+
+    # ---- 3. Old-design white-circle fallback ----
+    white = (r > 235) & (g > 235) & (b > 235)
+    labeled_w, _ = label(white)
+    for i, sl in enumerate(find_objects(labeled_w), 1):
+        if sl is None:
+            continue
+        y0, y1 = sl[0].start, sl[0].stop
+        x0, x1 = sl[1].start, sl[1].stop
+        blob_h, blob_w = y1 - y0, x1 - x0
+        area = (labeled_w[sl] == i).sum()
+        if not (int(100 * _S) < blob_h < int(140 * _S)
+                and int(100 * _S) < blob_w < int(140 * _S)):
+            continue
+        if abs(blob_w - blob_h) >= 15:
             continue
         if area < int(8500 * _S * _S) or area > int(12000 * _S * _S):
             continue
