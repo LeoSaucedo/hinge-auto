@@ -122,14 +122,12 @@ def do_like(message: str = "") -> None:
     scroll_back_to_top()
     heart_xy = vision.find_first_heart(adb.screenshot())
     if heart_xy is None:
-        # Static fallback used to fire here, but it silently misses on
-        # profiles where the heart's real position differs from the
-        # calibrated coord (different layouts, partial scroll-back). The
-        # loop would then type/tap into the void and never advance,
-        # producing an infinite-loop on the same profile. Bail to skip
-        # instead so the profile advances and the loop survives.
+        # Vision detection failed — fall back to static coord. If the
+        # static tap misses (wrong layout, etc.), the main loop's
+        # duplicate detection will force-skip and recover.
+        heart_xy = config.COORDS["heart_photo_1"]
         save_error_screenshot("heart-not-found")
-        raise RuntimeError("vision: couldn't find photo-1 heart after scroll-back")
+        print(f"Vision couldn't find heart — falling back to static coord {heart_xy}")
     print(f"Vision found first heart at {heart_xy}")
     adb.tap(*heart_xy)
     adb.jitter_sleep("after_tap")
