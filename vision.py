@@ -68,9 +68,20 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
 
 
 def find_first_heart(png: bytes) -> tuple[int, int] | None:
-    """Locate the heart icon on photo 1 (topmost heart in current view)."""
+    """Locate the heart icon on photo 1 (topmost heart in current view).
+
+    Hinge changed the button in July 2026 from a black heart on a white
+    circle to a white heart on a dark circle. Mask detects either the old
+    white circular background OR the new dark circular background so it
+    works regardless of which design is currently live.
+    """
     arr = _png_to_array(png)
-    mask = (arr[..., 0] > 235) & (arr[..., 1] > 235) & (arr[..., 2] > 235)
+    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+    # Old design: black heart embedded in a white circular background
+    old_mask = (r > 235) & (g > 235) & (b > 235)
+    # New design (July 2026): white heart on a dark circular background
+    new_mask = (r < 60) & (g < 60) & (b < 60)
+    mask = old_mask | new_mask
     labeled, _ = label(mask)
     hearts = []
     for i, sl in enumerate(find_objects(labeled), 1):
