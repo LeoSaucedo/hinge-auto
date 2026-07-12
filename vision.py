@@ -70,16 +70,29 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
 def find_first_heart(png: bytes) -> tuple[int, int] | None:
     """Locate the heart icon on photo 1 (topmost heart in current view).
 
-    July 2026: Hinge changed from black-on-white to white (#FFFEFD) heart
-    on black (#1A1A1A) circle. Mask detects either design.
+    Verifies that the dark circle of the new white-on-black heart design
+    (July 2026) is actually at the expected position before returning it.
+    Falls back to None if the position doesn't look like it has the dark
+    circle background — caller uses the static coordinate instead.
     """
     arr = _png_to_array(png)
     r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-    # Old design: black heart embedded in a white circular background
-    old_mask = (r > 235) & (g > 235) & (b > 235)
-    # New design: white heart (#FFFEFD) on black (#1A1A1A) circle
-    new_mask = (r < 60) & (g < 60) & (b < 60)
-    mask = old_mask | new_mask
+
+    # Check the expected heart position: dark circle (#1A1A1A = ~26,26,26)
+    # at bottom-right of the action row. Sample a 5x5 kernel around the
+    # static coordinate — if the majority of pixels are the dark button
+    # color, the heart is present and the coord is likely valid.
+    cx, cy = config.COORDS["heart_photo_1"]
+    r_patch = r[cy-2:cy+3, cx-2:cx+3]
+    g_patch = g[cy-2:cy+3, cx-2:cx+3]
+    b_patch = b[cy-2:cy+3, cx-2:cx+3]
+    dark = (r_patch < 60) & (g_patch < 60) & (b_patch < 60)
+    if dark.sum() >= 15:  # at least 15/25 pixels are dark circle
+        return (cx, cy)
+
+    # The new dark button isn't where expected. Try the old white-circle
+    # design as a fallback (black heart on white circular background).
+    mask = (r > 235) & (g > 235) & (b > 235)
     labeled, _ = label(mask)
     hearts = []
     for i, sl in enumerate(find_objects(labeled), 1):
