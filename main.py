@@ -121,24 +121,14 @@ def do_like(message: str = "") -> None:
     # Send Like ends up off-screen and undetectable. Worth the ~14s.
     scroll_back_to_top()
 
-    # ── VISION-BASED HEART DETECTION (commented out — not working reliably) ──
-    # heart_xy = vision.find_first_heart(adb.screenshot())
-    # if heart_xy is None:
-    #     # Vision detection failed — fall back to static coord. If the
-    #     # static tap misses (wrong layout, etc.), the main loop's
-    #     # duplicate detection will force-skip and recover.
-    #     heart_xy = config.COORDS["heart_photo_1"]
-    #     save_error_screenshot("heart-not-found")
-    #     print(f"Vision couldn't find heart — falling back to static coord {heart_xy}")
-    # print(f"Vision found first heart at {heart_xy}")
-    # print(f"Clicking heart at {heart_xy}")
-    # adb.tap(*heart_xy)
-    # adb.jitter_sleep("after_tap")
-    # ── END VISION-BASED HEART DETECTION ──
-
-    # Use static heart coordinate directly (vision detection disabled)
-    heart_xy = config.COORDS["heart_photo_1"]
-    print(f"Clicking heart at static coord {heart_xy}")
+    # ── VISION-BASED HEART DETECTION ──
+    heart_xy = vision.find_first_heart(adb.screenshot())
+    if heart_xy is None:
+        # Vision detection failed — skip this profile. The loop's
+        # duplicate detection will advance to the next one.
+        save_error_screenshot("heart-not-found")
+        raise RuntimeError("vision: couldn't find photo-1 heart after scroll-back")
+    print(f"Clicking heart at {heart_xy}")
     adb.tap(*heart_xy)
     adb.jitter_sleep("after_tap")
 
