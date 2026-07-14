@@ -41,6 +41,7 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
     )
     labeled, num = label(pink)
     candidates = []
+    y_cutoff = int(arr.shape[0] * 0.10)  # ignore top 10% (three-dot menu area)
     for i in range(1, num + 1):
         sl = find_objects((labeled == i).astype(np.int32))
         if sl is None or sl[0] is None:
@@ -53,6 +54,8 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
         if not (h > 15 and area > 30):
             continue
         cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+        if cy < y_cutoff:
+            continue
         # Button text is in the right half of the compose card.
         if cx < int(500 * _S):
             continue
