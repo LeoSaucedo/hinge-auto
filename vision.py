@@ -81,8 +81,7 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
         print(f"  Send Like: template match at ({cx}, {cy}) conf={max_val:.3f}")
         return (cx, cy)
 
-    print(f"  Send Like: template confidence {max_val:.3f} < {_SENDLIKE_CONFIDENCE} "
-          f"— skipping profile")
+    print(f"  Send Like: not found (conf={max_val:.3f} < {_SENDLIKE_CONFIDENCE})")
     return None
 
 
@@ -121,8 +120,7 @@ def find_first_heart(png: bytes) -> tuple[int, int] | None:
         print(f"  Heart vision: template match at ({cx}, {cy}) conf={max_val:.3f}")
         return (cx, cy)
 
-    print(f"  Heart vision: template confidence {max_val:.3f} < {_HEART_CONFIDENCE} "
-          f"— skipping profile")
+    print(f"  Heart vision: not found (conf={max_val:.3f} < {_HEART_CONFIDENCE})")
     return None
 
 

@@ -87,17 +87,17 @@ def do_skip() -> None:
 
 
 def _dismiss_compose_card_if_visible() -> None:
-    """Tap the compose card close button if the card is showing.
+    """Check for a stale compose card from a previous failed like.
 
-    After a failed do_like, the compose card may still be open, which
-    blocks find_first_heart on the next profile. Checks for the pink
-    Send Like text before tapping.
+    If one is still open, something went wrong upstream — tap skip to
+    advance past this profile and log the event.
     """
     ss = adb.screenshot()
     if vision.find_send_like(ss) is not None:
-        cx, cy = config.COORDS["compose_close"]
-        adb.tap(cx, cy)
-        adb.jitter_sleep("after_tap")
+        print("⚠️  Stale compose card detected — tapping skip")
+        save_error_screenshot("stale-compose-card")
+        do_skip()
+        raise RuntimeError("compose card still open from previous profile")
 
 
 def do_like(message: str = "") -> None:
@@ -106,11 +106,13 @@ def do_like(message: str = "") -> None:
     if config.DRY_RUN:
         do_skip()
         return
-    _dismiss_compose_card_if_visible()
     scroll_back_to_top()
-    # Let the profile settle after scrolling — momentum scrolling can
-    # leave the view mid-animation if we screenshot too fast.
+    # Let the profile settle after scrolling.
     time.sleep(0.5)
+    # Dismiss any stale compose card from a previous failed like.
+    # (Modal overlay — scroll position doesn't affect it, so check here
+    # where the screen is clean and heart detection won't false-match.)
+    _dismiss_compose_card_if_visible()
     print("Scrolled to top — running OpenCV scans")
 
     # ── 4. Find and tap the black heart ──
