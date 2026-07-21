@@ -108,7 +108,7 @@ def find_first_heart(png: bytes) -> tuple[int, int] | None:
     x0 = int(scr_w * 0.60)
     x1 = scr_w
     y0 = int(scr_h * 0.20)
-    y1 = int(scr_h * 0.90)
+    y1 = int(scr_h * 0.50)  # top half only — avoid matching photo 2
     roi = screen[y0:y1, x0:x1]
 
     result = cv2.matchTemplate(roi, _heart_template, cv2.TM_CCOEFF_NORMED)
