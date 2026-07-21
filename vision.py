@@ -26,20 +26,21 @@ def _png_to_array(png: bytes) -> np.ndarray:
 def find_send_like(png: bytes) -> tuple[int, int] | None:
     """Locate the 'Send Like' button. Returns (x, y) center or None.
 
-    Hinge changed the compose card button in late June 2026 — replaced
-    the filled peach button with a white button + pink 'Send Like' text
-    (RGB ~255, 159, 191). This finds the pink text blob and returns its
-    centroid as a proxy for the button position.
+    Hinge changed the compose card button color in July 2026 — replaced
+    the pink 'Send Like' text with a warm beige/cream text (RGB ~238, 225,
+    219). This finds the beige text blob and returns its centroid as a
+    proxy for the button position.
     """
     arr = _png_to_array(png)
     r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-    # Pink "Send Like" text: r ~255, g ~160, b ~190. r dominates.
-    pink = (
-        (r > 240) & (g > 140) & (g < 200) & (b > 170) & (b < 210)
-        & (r > g) & (r > b)
-        & ((r.astype(np.int32) - g.astype(np.int32)) > 40)
+    # Beige "Send Like" text: r ~238, g ~225, b ~219. r>g>b, all close.
+    beige = (
+        (r > 230) & (r < 248) &
+        (g > 215) & (g < 235) &
+        (b > 208) & (b < 230) &
+        (r > g) & (g > b)
     )
-    labeled, num = label(pink)
+    labeled, num = label(beige)
     candidates = []
     y_cutoff = int(arr.shape[0] * 0.10)  # ignore top 10% (three-dot menu area)
     for i in range(1, num + 1):
