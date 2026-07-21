@@ -89,13 +89,14 @@ def do_skip() -> None:
 def _dismiss_compose_card_if_visible() -> None:
     """Check for a stale compose card from a previous failed like.
 
-    If one is still open, something went wrong upstream — skip this
-    profile and log the event rather than papering over it.
+    If one is still open, something went wrong upstream — tap skip to
+    advance past this profile and log the event.
     """
     ss = adb.screenshot()
     if vision.find_send_like(ss) is not None:
-        print("⚠️  Stale compose card detected — skipping profile")
+        print("⚠️  Stale compose card detected — tapping skip")
         save_error_screenshot("stale-compose-card")
+        do_skip()
         raise RuntimeError("compose card still open from previous profile")
 
 
