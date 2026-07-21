@@ -132,7 +132,7 @@ def print_running_totals(
     avg_cost = total_cost / profiles_seen if profiles_seen else 0
     avg_time = total_seconds / profiles_seen if profiles_seen else 0
     like_rate = likes_sent / profiles_seen if profiles_seen else 0
-    model_tag = _ACTIVE_MODEL.rsplit("-", 2)[0] if _ACTIVE_MODEL else "?"
+    model_tag = _ACTIVE_MODEL or "?"
     print(
         f"[totals] {profiles_seen} profiles | {likes_sent} likes "
         f"({like_rate:.0%}) | {skips} skips | "
