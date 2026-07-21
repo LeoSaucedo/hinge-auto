@@ -68,10 +68,20 @@ MAX_LIKES_PER_SESSION = 8
 SESSION_LIKE_MIN = 0
 MAX_PROFILES_PER_SESSION = 100
 
-# ---------- Emulator settings ----------
+# ---------- Device settings ----------
 # Moto e20 real phone is 720x1600. Change if using a different device.
 SCREEN_WIDTH = 720
 SCREEN_HEIGHT = 1600
+
+# ---------- Scaling ----------
+# Reference device (Pixel 10 = 1080x2424). All pixel offsets in the codebase
+# are defined relative to this reference and scaled at runtime.
+REF_WIDTH = 1080
+REF_HEIGHT = 2424
+
+# Auto-computed scale factors (available for import by other modules).
+SCALE_X = SCREEN_WIDTH / REF_WIDTH
+SCALE_Y = SCREEN_HEIGHT / REF_HEIGHT
 
 # Number of scroll-and-screenshot passes per profile.
 # Longer profiles (6 photos + 3 prompts) need ~7 frames at the scroll step
