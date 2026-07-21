@@ -94,9 +94,9 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
 def find_first_heart(png: bytes) -> tuple[int, int] | None:
     """Locate the heart icon on photo 1 via OpenCV template matching.
 
-    Searches the right ~40% of the screen (photo 1 area). Returns
-    (x, y) center of the best match, or None if confidence is below
-    threshold or the template file is missing.
+    Searches the right ~40% of the screen across the full height.
+    Finds all heart matches above confidence and returns the top-most
+    one (smallest Y = highest on screen = photo 1).
     """
     _load_templates()
     if _heart_template is None:
@@ -109,21 +109,29 @@ def find_first_heart(png: bytes) -> tuple[int, int] | None:
 
     x0 = int(scr_w * 0.60)
     x1 = scr_w
-    y0 = int(scr_h * 0.20)
-    y1 = int(scr_h * 0.50)  # top half only — avoid matching photo 2
+    y0 = int(scr_h * 0.10)
+    y1 = int(scr_h * 0.90)
     roi = screen[y0:y1, x0:x1]
 
     result = cv2.matchTemplate(roi, _heart_template, cv2.TM_CCOEFF_NORMED)
-    _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
-    if max_val >= _HEART_CONFIDENCE:
-        cx = x0 + max_loc[0] + tmpl_w // 2
-        cy = y0 + max_loc[1] + tmpl_h // 2
-        print(f"  Heart vision: template match at ({cx}, {cy}) conf={max_val:.3f}")
-        return (cx, cy)
+    # Find all matches above threshold, pick the top-most (smallest Y).
+    locations = np.where(result >= _HEART_CONFIDENCE)
+    if len(locations[0]) == 0:
+        best = result.max()
+        print(f"  Heart vision: not found (best conf={best:.3f} < {_HEART_CONFIDENCE})")
+        return None
 
-    print(f"  Heart vision: not found (conf={max_val:.3f} < {_HEART_CONFIDENCE})")
-    return None
+    best_idx = locations[0].argmin()
+    match_y = locations[0][best_idx]
+    match_x = locations[1][best_idx]
+    best_conf = result[match_y, match_x]
+
+    cx = x0 + match_x + tmpl_w // 2
+    cy = y0 + match_y + tmpl_h // 2
+    print(f"  Heart vision: top match at ({cx}, {cy}) conf={best_conf:.3f} "
+          f"({len(locations[0])} total above threshold)")
+    return (cx, cy)
 
 
 # ============================================================
