@@ -65,19 +65,21 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
         return None
 
     screen = _png_to_ndarray(png)
-    scr_w = screen.shape[1]
+    scr_h, scr_w = screen.shape[:2]
     tmpl_h, tmpl_w = _sendlike_template.shape[:2]
 
-    # Narrow search to the compose-card region (right half)
+    # Compose card sits in right half, middle 50% vertically
+    y0 = int(scr_h * 0.25)
+    y1 = int(scr_h * 0.75)
     x_crop = int(scr_w * 0.25)
-    roi = screen[:, x_crop:]
+    roi = screen[y0:y1, x_crop:]
 
     result = cv2.matchTemplate(roi, _sendlike_template, cv2.TM_CCOEFF_NORMED)
     _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
     if max_val >= _SENDLIKE_CONFIDENCE:
         cx = x_crop + max_loc[0] + tmpl_w // 2
-        cy = max_loc[1] + tmpl_h // 2
+        cy = y0 + max_loc[1] + tmpl_h // 2
         print(f"  Send Like: template match at ({cx}, {cy}) conf={max_val:.3f}")
         return (cx, cy)
 
