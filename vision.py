@@ -85,7 +85,7 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
         return (cx, cy)
 
     print(f"  Send Like: template confidence {max_val:.3f} < {_SENDLIKE_CONFIDENCE} "
-          f"— falling back to static coords")
+          f"— skipping profile")
     return None
 
 
@@ -170,8 +170,8 @@ def find_first_heart(png: bytes) -> tuple[int, int] | None:
         return (cx, cy)
 
     print(f"  Heart vision: template confidence {max_val:.3f} < {_HEART_CONFIDENCE} "
-          f"— falling back to static coord")
-    return config.COORDS["heart_photo_1"]
+          f"— skipping profile")
+    return None
 
 
 # --- old find_first_heart (scanning-window dark-ring scoring) ---
