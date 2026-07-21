@@ -143,11 +143,10 @@ def do_like(message: str = "") -> None:
         if send_xy is not None:
             print(f"Vision found Send Like at {send_xy} (after keyboard dismiss)")
     if send_xy is None:
-        # Fall back to static coordinate — vision color detection is
-        # fragile when Hinge tweaks button styles. The compose card
-        # is already open and stays visible after keyboard dismiss.
-        send_xy = config.COORDS["send_like_button"]
-        print(f"Vision couldn't find Send Like — falling back to static coord {send_xy}")
+        # Template matching failed — skip this profile rather than
+        # gambling on a static coordinate that may hit the wrong target.
+        save_error_screenshot("send-like-not-found")
+        raise RuntimeError("vision: couldn't find Send Like after heart tap")
     comment_xy = vision.find_comment_input(send_xy)
 
     if config.DRY_RUN_MESSAGE and message:
