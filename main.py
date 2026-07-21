@@ -87,17 +87,16 @@ def do_skip() -> None:
 
 
 def _dismiss_compose_card_if_visible() -> None:
-    """Tap the compose card close button if the card is showing.
+    """Check for a stale compose card from a previous failed like.
 
-    After a failed do_like, the compose card may still be open, which
-    blocks find_first_heart on the next profile. Checks for the pink
-    Send Like text before tapping.
+    If one is still open, something went wrong upstream — skip this
+    profile and log the event rather than papering over it.
     """
     ss = adb.screenshot()
     if vision.find_send_like(ss) is not None:
-        cx, cy = config.COORDS["compose_close"]
-        adb.tap(cx, cy)
-        adb.jitter_sleep("after_tap")
+        print("⚠️  Stale compose card detected — skipping profile")
+        save_error_screenshot("stale-compose-card")
+        raise RuntimeError("compose card still open from previous profile")
 
 
 def do_like(message: str = "") -> None:
