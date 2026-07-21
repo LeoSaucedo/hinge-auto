@@ -27,8 +27,8 @@ _TEMPLATE_DIR = Path(__file__).parent / "templates"
 _heart_template: np.ndarray | None = None
 _sendlike_template: np.ndarray | None = None
 
-_SENDLIKE_CONFIDENCE = 0.75
-_HEART_CONFIDENCE = 0.55
+_SENDLIKE_CONFIDENCE = 0.85
+_HEART_CONFIDENCE = 0.85
 
 
 def _load_templates() -> None:
