@@ -33,11 +33,12 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
     """
     arr = _png_to_array(png)
     r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-    # Beige "Send Like" text: r ~238, g ~225, b ~219. r>g>b, all close.
+    # Beige "Send Like" text: exact RGB (238, 225, 219). Tight
+    # ±3 channels for anti-aliased edges only — no false positives.
     beige = (
-        (r > 230) & (r < 248) &
-        (g > 215) & (g < 235) &
-        (b > 208) & (b < 230) &
+        (r > 234) & (r < 243) &
+        (g > 221) & (g < 229) &
+        (b > 215) & (b < 223) &
         (r > g) & (g > b)
     )
     labeled, num = label(beige)
