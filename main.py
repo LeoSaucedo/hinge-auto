@@ -108,6 +108,10 @@ def do_like(message: str = "") -> None:
         return
     _dismiss_compose_card_if_visible()
     scroll_back_to_top()
+    # Let the profile settle after scrolling — momentum scrolling can
+    # leave the view mid-animation if we screenshot too fast.
+    time.sleep(0.5)
+    print("Scrolled to top — running OpenCV scans")
 
     # ── 4. Find and tap the black heart ──
     heart_xy = vision.find_first_heart(adb.screenshot())
