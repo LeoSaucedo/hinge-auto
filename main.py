@@ -129,11 +129,11 @@ def do_like(message: str = "") -> None:
         # Comment input is roughly center-x, a fixed offset above the
         # expected Send Like position (which sits below the heart).
         comment_x = int(config.SCREEN_WIDTH / 2)
-        comment_y = heart_xy[1] - 66
+        comment_y = heart_xy[1] - int(66 * config.SCALE_Y)
         adb.tap(comment_x, comment_y)
         adb.jitter_sleep("after_tap")
         # Estimate Send Like Y to crop the text-field pixel check.
-        est_send_y = heart_xy[1] + 105
+        est_send_y = heart_xy[1] + int(105 * config.SCALE_Y)
         empty_pixels = vision.comment_field_text_pixels(
             adb.screenshot(), (comment_x, est_send_y))
         adb.input_text(message)

@@ -8,7 +8,6 @@ import io
 from pathlib import Path
 
 import config
-
 import cv2
 import numpy as np
 from PIL import Image
@@ -16,7 +15,7 @@ from PIL import Image
 
 # Scale factor: resolution-independent constants are defined for 1080px
 # (Pixel 10 reference width) and scaled at import time.
-_S = config.SCREEN_WIDTH / 1080.0
+_S = config.SCALE_X
 
 # Template images (one-time load at module init)
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
