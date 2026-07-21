@@ -106,11 +106,13 @@ def do_like(message: str = "") -> None:
     if config.DRY_RUN:
         do_skip()
         return
-    _dismiss_compose_card_if_visible()
     scroll_back_to_top()
-    # Let the profile settle after scrolling — momentum scrolling can
-    # leave the view mid-animation if we screenshot too fast.
+    # Let the profile settle after scrolling.
     time.sleep(0.5)
+    # Dismiss any stale compose card from a previous failed like.
+    # (Modal overlay — scroll position doesn't affect it, so check here
+    # where the screen is clean and heart detection won't false-match.)
+    _dismiss_compose_card_if_visible()
     print("Scrolled to top — running OpenCV scans")
 
     # ── 4. Find and tap the black heart ──
