@@ -130,7 +130,7 @@ def do_like(message: str = "") -> None:
         # the keyboard opens on its own. Wait for the compose card
         # to settle before typing; don't tap the field (tapping away
         # would dismiss the keyboard).
-        time.sleep(1.5)
+        adb.jitter_sleep("after_tap")
         # Estimate Send Like Y to crop the text-field pixel check.
         est_send_y = heart_xy[1] + int(105 * config.SCALE_Y)
         empty_pixels = vision.comment_field_text_pixels(
