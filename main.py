@@ -126,23 +126,22 @@ def do_like(message: str = "") -> None:
 
     # ── 5. Type the message ──
     if message and not config.DRY_RUN_MESSAGE:
-        # Comment input is roughly center-x, a fixed offset above the
-        # expected Send Like position (which sits below the heart).
-        comment_x = int(config.SCREEN_WIDTH / 2)
-        comment_y = heart_xy[1] - int(66 * config.SCALE_Y)
-        adb.tap(comment_x, comment_y)
-        adb.jitter_sleep("after_tap")
+        # Hinge auto-focuses the comment field after the heart tap —
+        # the keyboard opens on its own. Wait for the compose card
+        # to settle before typing; don't tap the field (tapping away
+        # would dismiss the keyboard).
+        time.sleep(1.5)
         # Estimate Send Like Y to crop the text-field pixel check.
         est_send_y = heart_xy[1] + int(105 * config.SCALE_Y)
         empty_pixels = vision.comment_field_text_pixels(
-            adb.screenshot(), (comment_x, est_send_y))
+            adb.screenshot(), (int(config.SCREEN_WIDTH / 2), est_send_y))
         adb.input_text(message)
         deadline = time.monotonic() + 15
         target_pixels = empty_pixels + max(150, 20 * len(message))
         while time.monotonic() < deadline:
             time.sleep(1.0)
             current = vision.comment_field_text_pixels(
-                adb.screenshot(), (comment_x, est_send_y))
+                adb.screenshot(), (int(config.SCREEN_WIDTH / 2), est_send_y))
             if current >= target_pixels:
                 break
         else:
