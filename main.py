@@ -170,16 +170,9 @@ def do_like(message: str = "") -> None:
         print("Keyboard was still open after like — dismissed.")
 
 
-_MAX_BACK_PRESSES = 2
-_MAX_RESTARTS = 2
-
-
-def _recover_from_dialog(restart_count: int) -> None:
-    """Attempt to dismiss a dialog by pressing back.
-
-    Does NOT restart the app — that's handled separately in the main loop.
-    """
-    for i in range(3):
+def _recover_from_dialog() -> None:
+    """Attempt to dismiss a dialog by pressing back."""
+    for _ in range(3):
         adb.press_back()
         time.sleep(0.5)
 
@@ -443,17 +436,11 @@ def main() -> int:
             print(f"\nDIALOG DETECTED (streak {dialog_streak}): {decision.reasoning[:120]}")
             dialog_ss = save_error_screenshot(f"dialog-streak-{dialog_streak}")
 
-            if dialog_streak > _MAX_BACK_PRESSES + _MAX_RESTARTS:
-                # ── Tier 3: give up ──
-                msg = (f"Dialog recovery failed after {_MAX_BACK_PRESSES} back "
-                       f"presses + {_MAX_RESTARTS} app restarts. "
-                       f"Last reason: {decision.reasoning[:200]}")
-                print(f"TIER 3: {msg}")
-                report.post_error(msg, profiles_seen, likes_sent, skips,
-                                  screenshot_path=dialog_ss)
-                break
-
-            if dialog_streak > _MAX_BACK_PRESSES:
+            if dialog_streak == 1:
+                # ── Tier 1: press back to dismiss ──
+                print(f"  Tier 1: pressing back to dismiss...")
+                _recover_from_dialog()
+            elif dialog_streak == 2:
                 # ── Tier 2: force-stop + relaunch ──
                 print(f"  Tier 2: force-stopping + relaunching Hinge...")
                 adb.force_stop_app("co.hinge.app")
@@ -463,9 +450,13 @@ def main() -> int:
                 adb.tap(73, 1468)  # Discover tab
                 time.sleep(3)
             else:
-                # ── Tier 1: press back to dismiss ──
-                print(f"  Tier 1: pressing back to dismiss...")
-                _recover_from_dialog(0)
+                # ── Tier 3: give up ──
+                msg = (f"Dialog recovery failed after back button + app restart. "
+                       f"Last reason: {decision.reasoning[:200]}")
+                print(f"TIER 3: {msg}")
+                report.post_error(msg, profiles_seen, likes_sent, skips,
+                                  screenshot_path=dialog_ss)
+                break
 
             profiles_seen -= 1
             last_frame0_hash = None
