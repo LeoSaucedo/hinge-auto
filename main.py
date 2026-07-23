@@ -131,22 +131,22 @@ def do_like(message: str = "") -> None:
         # to settle before typing; don't tap the field (tapping away
         # would dismiss the keyboard).
         adb.jitter_sleep("after_tap")
-        # Estimate Send Like Y to crop the text-field pixel check.
-        est_send_y = heart_xy[1] + int(105 * config.SCALE_Y)
-        empty_pixels = vision.comment_field_text_pixels(
-            adb.screenshot(), (int(config.SCREEN_WIDTH / 2), est_send_y))
+        # ── Density check commented out (never successful) ──
+        # est_send_y = heart_xy[1] + int(105 * config.SCALE_Y)
+        # empty_pixels = vision.comment_field_text_pixels(
+        #     adb.screenshot(), (int(config.SCREEN_WIDTH / 2), est_send_y))
         adb.input_text(message)
-        deadline = time.monotonic() + 15
-        target_pixels = empty_pixels + max(150, 20 * len(message))
-        while time.monotonic() < deadline:
-            time.sleep(1.0)
-            current = vision.comment_field_text_pixels(
-                adb.screenshot(), (int(config.SCREEN_WIDTH / 2), est_send_y))
-            if current >= target_pixels:
-                break
-        else:
-            print(f"WARN: typed text didn't reach expected pixel density "
-                  f"(have {current}, want {target_pixels}) — sending anyway.")
+        # deadline = time.monotonic() + 15
+        # target_pixels = empty_pixels + max(150, 20 * len(message))
+        # while time.monotonic() < deadline:
+        #     time.sleep(1.0)
+        #     current = vision.comment_field_text_pixels(
+        #         adb.screenshot(), (int(config.SCREEN_WIDTH / 2), est_send_y))
+        #     if current >= target_pixels:
+        #         break
+        # else:
+        #     print(f"WARN: typed text didn't reach expected pixel density "
+        #           f"(have {current}, want {target_pixels}) — sending anyway.")
 
     # ── 6. Dismiss keyboard ──
     if message and not config.DRY_RUN_MESSAGE:
