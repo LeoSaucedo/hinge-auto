@@ -25,6 +25,13 @@ Decide LIKE or SKIP based on the user's preferences. Be reasonably selective —
 don't like profiles that clearly don't match, but don't be unreasonably picky
 either. When the profile is genuinely ambiguous, lean SKIP.
 
+IMPORTANT: If any dialog, popup, overlay, or non-profile screen is present
+that covers any part of the profile and prevents you from analyzing it fully —
+including settings panels, subscription upsells, notification prompts, rate-the-app
+nags, or any other interruption — set decision="NOT_A_PROFILE". Use reasoning
+to describe what you're seeing (e.g. "a subscription upsell dialog is blocking
+the profile"). Only return LIKE or SKIP when you can see the full profile.
+
 {message_voice}
 {premades_section}
 Submit your decision via the submit_decision tool."""
@@ -72,8 +79,8 @@ DECIDE_INPUT_SCHEMA = {
         },
         "decision": {
             "type": "string",
-            "enum": ["like", "skip"],
-            "description": "Whether to like or skip this profile.",
+            "enum": ["like", "skip", "NOT_A_PROFILE"],
+            "description": "Whether to like or skip this profile, or NOT_A_PROFILE if the screenshots don't show a profile at all (dialog, popup, settings, etc.).",
         },
         "confidence": {
             "type": "string",

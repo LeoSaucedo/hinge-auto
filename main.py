@@ -170,13 +170,31 @@ def do_like(message: str = "") -> None:
         print("Keyboard was still open after like — dismissed.")
 
 
-def save_error_screenshot(context: str) -> None:
-    """Capture the current screen and save to debug/errors/ for post-mortem."""
+_MAX_BACK_PRESSES = 2
+_MAX_RESTARTS = 2
+
+
+def _recover_from_dialog(restart_count: int) -> None:
+    """Attempt to dismiss a dialog by pressing back.
+
+    Does NOT restart the app — that's handled separately in the main loop.
+    """
+    for i in range(3):
+        adb.press_back()
+        time.sleep(0.5)
+
+
+def save_error_screenshot(context: str) -> str:
+    """Capture the current screen and save to debug/errors/ for post-mortem.
+
+    Returns the path to the saved screenshot."""
     errors_dir = config.DEBUG_DIR / "errors"
     errors_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     png = adb.screenshot()
-    (errors_dir / f"{ts}_{context}.png").write_bytes(png)
+    path = errors_dir / f"{ts}_{context}.png"
+    path.write_bytes(png)
+    return str(path)
 
 
 def save_debug(frames: list[bytes], decision, profile_idx: int) -> str | None:
@@ -314,6 +332,7 @@ def main() -> int:
     liked_profiles: list[dict] = []  # tracked for the webhook report
     last_frame0_hash: str | None = None
     duplicate_streak = 0
+    dialog_streak = 0
 
     while profiles_seen < config.MAX_PROFILES_PER_SESSION:
         profiles_seen += 1
@@ -417,6 +436,44 @@ def main() -> int:
         print(f"Reason:   {decision.reasoning}")
         if decision.message:
             print(f"Message:  {decision.message}")
+
+        # ── Dialog / popup detection & recovery ──
+        if decision.decision == "NOT_A_PROFILE":
+            dialog_streak += 1
+            print(f"\nDIALOG DETECTED (streak {dialog_streak}): {decision.reasoning[:120]}")
+            dialog_ss = save_error_screenshot(f"dialog-streak-{dialog_streak}")
+
+            if dialog_streak > _MAX_BACK_PRESSES + _MAX_RESTARTS:
+                # ── Tier 3: give up ──
+                msg = (f"Dialog recovery failed after {_MAX_BACK_PRESSES} back "
+                       f"presses + {_MAX_RESTARTS} app restarts. "
+                       f"Last reason: {decision.reasoning[:200]}")
+                print(f"TIER 3: {msg}")
+                report.post_error(msg, profiles_seen, likes_sent, skips,
+                                  screenshot_path=dialog_ss)
+                break
+
+            if dialog_streak > _MAX_BACK_PRESSES:
+                # ── Tier 2: force-stop + relaunch ──
+                print(f"  Tier 2: force-stopping + relaunching Hinge...")
+                adb.force_stop_app("co.hinge.app")
+                time.sleep(1.5)
+                adb.wake_screen()
+                adb.launch_app("co.hinge.app")
+                adb.tap(73, 1468)  # Discover tab
+                time.sleep(3)
+            else:
+                # ── Tier 1: press back to dismiss ──
+                print(f"  Tier 1: pressing back to dismiss...")
+                _recover_from_dialog(0)
+
+            profiles_seen -= 1
+            last_frame0_hash = None
+            duplicate_streak = 0
+            continue
+        else:
+            dialog_streak = 0
+
         folder_name = save_debug(frames, decision, profiles_seen)
 
         t2 = time.monotonic()
