@@ -171,10 +171,9 @@ def do_like(message: str = "") -> None:
 
 
 def _recover_from_dialog() -> None:
-    """Attempt to dismiss a dialog by pressing back."""
-    for _ in range(3):
-        adb.press_back()
-        time.sleep(0.5)
+    """Attempt to dismiss a dialog by pressing back once."""
+    adb.press_back()
+    time.sleep(1.0)
 
 
 def save_error_screenshot(context: str) -> str:
