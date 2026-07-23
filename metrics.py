@@ -36,6 +36,10 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
         "input_tokens":     1.50,
         "output_tokens":    9.00,
     },
+    "gemini-3.6-flash": {
+        "input_tokens":     1.50,
+        "output_tokens":    7.50,
+    },
     "gemini-3.1-flash-lite": {
         "input_tokens":     0.25,
         "output_tokens":    1.50,
@@ -132,7 +136,7 @@ def print_running_totals(
     avg_cost = total_cost / profiles_seen if profiles_seen else 0
     avg_time = total_seconds / profiles_seen if profiles_seen else 0
     like_rate = likes_sent / profiles_seen if profiles_seen else 0
-    model_tag = _ACTIVE_MODEL.rsplit("-", 2)[0] if _ACTIVE_MODEL else "?"
+    model_tag = _ACTIVE_MODEL or "?"
     print(
         f"[totals] {profiles_seen} profiles | {likes_sent} likes "
         f"({like_rate:.0%}) | {skips} skips | "
