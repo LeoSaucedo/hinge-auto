@@ -173,7 +173,7 @@ def is_app_loading(png: bytes) -> bool:
     UI buttons that fill most of the screen with non-white pixels.
 
     Uses a simple white-pixel ratio across the full content area
-    (excluding status bar and nav bar). If >88% of pixels are
+    (excluding status bar and nav bar). If >75% of pixels are
     near-white (≥230), it's a loading screen. On a real profile,
     photos and text bring this well below 50%.
     """
@@ -190,4 +190,4 @@ def is_app_loading(png: bytes) -> bool:
         return False
 
     white_ratio = (content > 230).mean()
-    return white_ratio > 0.88
+    return white_ratio > 0.75
