@@ -41,6 +41,13 @@ def _profile_region_hash(png: bytes) -> str:
 
 def capture_profile() -> list[bytes]:
     """Scroll through the current profile, returning a list of PNG frames."""
+    # Check for stuck loading screen BEFORE any scrolls or interactions.
+    # Saves ~3-8 wasted scroll-up swipes + avoids burning API credits
+    # judging a loading screen as if it were a profile.
+    initial = adb.screenshot()
+    if vision.is_app_loading(initial):
+        raise RuntimeError("app stuck on loading screen")
+
     # Defensive: new profiles load at the top, so this is just guarding
     # against the app being mid-scroll from a prior partial action. A
     # handful of swipes is enough — full 18-swipe sweep isn't needed
@@ -331,7 +338,36 @@ def main() -> int:
         print(f"\n--- Profile {profiles_seen} ---")
 
         t0 = time.monotonic()
-        frames = capture_profile()
+        try:
+            frames = capture_profile()
+        except RuntimeError as e:
+            if "loading screen" in str(e):
+                dialog_streak += 1
+                print(f"\nAPP STUCK ON LOADING SCREEN (streak {dialog_streak})")
+                dialog_ss = save_error_screenshot(f"loading-screen-{dialog_streak}")
+
+                # Back press won't help an unloaded app — go straight to restart.
+                if dialog_streak >= 3:
+                    msg = (f"Loading screen persisted after {dialog_streak} "
+                           f"app restarts.")
+                    print(f"GIVING UP: {msg}")
+                    report.post_error(msg, profiles_seen, likes_sent, skips,
+                                      screenshot_path=dialog_ss)
+                    break
+
+                print(f"  Force-stopping + relaunching Hinge...")
+                adb.force_stop_app("co.hinge.app")
+                time.sleep(2)
+                adb.wake_screen()
+                adb.launch_app("co.hinge.app")
+                adb.tap(73, 1468)  # Discover tab
+                time.sleep(3)
+
+                profiles_seen -= 1
+                last_frame0_hash = None
+                duplicate_streak = 0
+                continue
+            raise
         t_capture = time.monotonic() - t0
         print(f"Captured {len(frames)} frames")
 
