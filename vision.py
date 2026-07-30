@@ -157,3 +157,45 @@ def find_comment_input(send_like_xy: tuple[int, int]) -> tuple[int, int]:
     """Comment input sits at a fixed offset above the Send Like button."""
     _, send_y = send_like_xy
     return (int(540 * _S), send_y - int(171 * _S))
+
+
+# ============================================================
+# is_app_loading — detect stuck loading / splash screen
+# ============================================================
+
+def is_app_loading(png: bytes) -> bool:
+    """Check if Hinge is stuck on the loading/splash screen.
+
+    On a loaded profile the content area has photos (high std) and
+    text/UI elements (dark pixels). On the loading screen the entire
+    content region is a uniform light backdrop — no profile card,
+    no text, no photos.
+
+    Samples two bands of the content area (profile photo zone and
+    prompt/text zone). Only returns True when both are uniform-light,
+    which guards against false positives from white-background photos
+    or low-contrast profiles.
+    """
+    im = np.array(Image.open(io.BytesIO(png)).convert("L"))
+    h, w = im.shape
+    # Sanity-check: screen is at least ~1080px wide and has the
+    # expected portrait layout height.
+    if h < 1500 or w < 950:
+        return False
+
+    # Sample two horizontal bands of the content area (excluding the
+    # status bar at top and nav bar at bottom). Both must be
+    # uniform-light to classify as a loading screen.
+    #
+    # Band 1 — profile photo zone (~y=250–900 on a 1080-wide screen)
+    # Band 2 — prompt / text area (~y=900–1400)
+    r1 = im[250:900, 80:1000]
+    r2 = im[900:1400, 80:1000]
+
+    for r in (r1, r2):
+        if r.size == 0:
+            continue
+        if r.std() > 30 or r.mean() < 180:
+            return False
+
+    return True
