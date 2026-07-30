@@ -166,36 +166,28 @@ def find_comment_input(send_like_xy: tuple[int, int]) -> tuple[int, int]:
 def is_app_loading(png: bytes) -> bool:
     """Check if Hinge is stuck on the loading/splash screen.
 
-    On a loaded profile the content area has photos (high std) and
-    text/UI elements (dark pixels). On the loading screen the entire
-    content region is a uniform light backdrop — no profile card,
-    no text, no photos.
+    The loading screen is a white backdrop with a small animated logo
+    in the center — the animation creates some pixel variation at
+    center, but the overwhelming majority of the content area is still
+    near-white. A loaded profile has a photo card, text overlays, and
+    UI buttons that fill most of the screen with non-white pixels.
 
-    Samples two bands of the content area (profile photo zone and
-    prompt/text zone). Only returns True when both are uniform-light,
-    which guards against false positives from white-background photos
-    or low-contrast profiles.
+    Uses a simple white-pixel ratio across the full content area
+    (excluding status bar and nav bar). If >88% of pixels are
+    near-white (≥230), it's a loading screen. On a real profile,
+    photos and text bring this well below 50%.
     """
     im = np.array(Image.open(io.BytesIO(png)).convert("L"))
     h, w = im.shape
-    # Sanity-check: screen is at least ~1080px wide and has the
-    # expected portrait layout height.
     if h < 1500 or w < 950:
         return False
 
-    # Sample two horizontal bands of the content area (excluding the
-    # status bar at top and nav bar at bottom). Both must be
-    # uniform-light to classify as a loading screen.
-    #
-    # Band 1 — profile photo zone (~y=250–900 on a 1080-wide screen)
-    # Band 2 — prompt / text area (~y=900–1400)
-    r1 = im[250:900, 80:1000]
-    r2 = im[900:1400, 80:1000]
+    # Full content area: exclude status bar (~y=0-150) and nav bar
+    # (~bottom 250px). The animated logo occupies a small fraction of
+    # this region — it won't push white_ratio below the threshold.
+    content = im[150:h - 250, 50:w - 50]
+    if content.size == 0:
+        return False
 
-    for r in (r1, r2):
-        if r.size == 0:
-            continue
-        if r.std() > 30 or r.mean() < 180:
-            return False
-
-    return True
+    white_ratio = (content > 230).mean()
+    return white_ratio > 0.88
