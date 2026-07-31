@@ -183,7 +183,8 @@ def _apply_env_overrides() -> None:
     """Override any config module variable from .env.
 
     Add `KEY=VALUE` to .env and it'll override the matching config.py
-    variable at import time. Supports str, int, float, and bool types.
+    variable at import time. Supports str, int, float, bool, and Path types
+    (Path values are resolved relative to BASE_DIR unless absolute).
     """
     g = globals()
     for key, val in os.environ.items():
@@ -202,6 +203,10 @@ def _apply_env_overrides() -> None:
                 g[key] = float(val)
             except ValueError:
                 print(f"[config] env {key}={val!r}: not a valid float, skipped")
+        elif isinstance(current, Path):
+            g[key] = Path(val).expanduser()
+            if not g[key].is_absolute():
+                g[key] = BASE_DIR / g[key]
         else:
             g[key] = val
 
