@@ -41,6 +41,13 @@ def _profile_region_hash(png: bytes) -> str:
 
 def capture_profile() -> list[bytes]:
     """Scroll through the current profile, returning a list of PNG frames."""
+    # Check for stuck loading screen BEFORE any scrolls or interactions.
+    # Saves ~3-8 wasted scroll-up swipes + avoids burning API credits
+    # judging a loading screen as if it were a profile.
+    initial = adb.screenshot()
+    if vision.is_app_loading(initial):
+        raise RuntimeError("app stuck on loading screen")
+
     # Defensive: new profiles load at the top, so this is just guarding
     # against the app being mid-scroll from a prior partial action. A
     # handful of swipes is enough — full 18-swipe sweep isn't needed
@@ -170,13 +177,23 @@ def do_like(message: str = "") -> None:
         print("Keyboard was still open after like — dismissed.")
 
 
-def save_error_screenshot(context: str) -> None:
-    """Capture the current screen and save to debug/errors/ for post-mortem."""
+def _recover_from_dialog() -> None:
+    """Attempt to dismiss a dialog by pressing back once."""
+    adb.press_back()
+    time.sleep(1.0)
+
+
+def save_error_screenshot(context: str) -> str:
+    """Capture the current screen and save to debug/errors/ for post-mortem.
+
+    Returns the path to the saved screenshot."""
     errors_dir = config.DEBUG_DIR / "errors"
     errors_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     png = adb.screenshot()
-    (errors_dir / f"{ts}_{context}.png").write_bytes(png)
+    path = errors_dir / f"{ts}_{context}.png"
+    path.write_bytes(png)
+    return str(path)
 
 
 def save_debug(frames: list[bytes], decision, profile_idx: int) -> str | None:
@@ -314,13 +331,43 @@ def main() -> int:
     liked_profiles: list[dict] = []  # tracked for the webhook report
     last_frame0_hash: str | None = None
     duplicate_streak = 0
+    dialog_streak = 0
 
     while profiles_seen < config.MAX_PROFILES_PER_SESSION:
         profiles_seen += 1
         print(f"\n--- Profile {profiles_seen} ---")
 
         t0 = time.monotonic()
-        frames = capture_profile()
+        try:
+            frames = capture_profile()
+        except RuntimeError as e:
+            if "loading screen" in str(e):
+                dialog_streak += 1
+                print(f"\nAPP STUCK ON LOADING SCREEN (streak {dialog_streak})")
+                dialog_ss = save_error_screenshot(f"loading-screen-{dialog_streak}")
+
+                # Back press won't help an unloaded app — go straight to restart.
+                if dialog_streak >= 3:
+                    msg = (f"Loading screen persisted after {dialog_streak} "
+                           f"app restarts.")
+                    print(f"GIVING UP: {msg}")
+                    report.post_error(msg, profiles_seen, likes_sent, skips,
+                                      screenshot_path=dialog_ss)
+                    break
+
+                print(f"  Force-stopping + relaunching Hinge...")
+                adb.force_stop_app("co.hinge.app")
+                time.sleep(2)
+                adb.wake_screen()
+                adb.launch_app("co.hinge.app")
+                adb.tap(73, 1468)  # Discover tab
+                time.sleep(3)
+
+                profiles_seen -= 1
+                last_frame0_hash = None
+                duplicate_streak = 0
+                continue
+            raise
         t_capture = time.monotonic() - t0
         print(f"Captured {len(frames)} frames")
 
@@ -417,6 +464,42 @@ def main() -> int:
         print(f"Reason:   {decision.reasoning}")
         if decision.message:
             print(f"Message:  {decision.message}")
+
+        # ── Dialog / popup detection & recovery ──
+        if decision.decision == "NOT_A_PROFILE":
+            dialog_streak += 1
+            print(f"\nDIALOG DETECTED (streak {dialog_streak}): {decision.reasoning[:120]}")
+            dialog_ss = save_error_screenshot(f"dialog-streak-{dialog_streak}")
+
+            if dialog_streak == 1:
+                # ── Tier 1: press back to dismiss ──
+                print(f"  Tier 1: pressing back to dismiss...")
+                _recover_from_dialog()
+            elif dialog_streak == 2:
+                # ── Tier 2: force-stop + relaunch ──
+                print(f"  Tier 2: force-stopping + relaunching Hinge...")
+                adb.force_stop_app("co.hinge.app")
+                time.sleep(1.5)
+                adb.wake_screen()
+                adb.launch_app("co.hinge.app")
+                adb.tap(73, 1468)  # Discover tab
+                time.sleep(3)
+            else:
+                # ── Tier 3: give up ──
+                msg = (f"Dialog recovery failed after back button + app restart. "
+                       f"Last reason: {decision.reasoning[:200]}")
+                print(f"TIER 3: {msg}")
+                report.post_error(msg, profiles_seen, likes_sent, skips,
+                                  screenshot_path=dialog_ss)
+                break
+
+            profiles_seen -= 1
+            last_frame0_hash = None
+            duplicate_streak = 0
+            continue
+        else:
+            dialog_streak = 0
+
         folder_name = save_debug(frames, decision, profiles_seen)
 
         t2 = time.monotonic()

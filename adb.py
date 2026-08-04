@@ -131,6 +131,11 @@ def dismiss_keyboard_if_visible() -> bool:
     return False
 
 
+def press_back() -> None:
+    """Press the Android back button once."""
+    _run(["shell", "input", "keyevent", "4"])
+
+
 def launch_app(package: str) -> None:
     """Launch an Android app by package name. Force-stops first for a clean slate."""
     force_stop_app(package)

@@ -60,6 +60,44 @@ def _send_multipart_payload(webhook_url: str, payload: dict,
         print(f"[report] webhook failed: {e.code} {e.read().decode()[:200]}")
 
 
+def post_error(message: str, profiles_seen: int, likes_sent: int,
+             skips: int, screenshot_path: str | None = None) -> None:
+    """Send a fatal-error embed to the Discord webhook.
+
+    If screenshot_path is provided, the screenshot is attached as a file."""
+    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    if not webhook_url:
+        return
+
+    embed = {
+        "title": "❌ Hinge Auto — Run Aborted",
+        "color": 0xED4245,
+        "description": message,
+        "fields": [
+            {"name": "👀 Seen",  "value": str(profiles_seen), "inline": True},
+            {"name": "❤️ Likes", "value": str(likes_sent),    "inline": True},
+            {"name": "⏭️ Skips", "value": str(skips),         "inline": True},
+        ],
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
+    }
+
+    if screenshot_path:
+        try:
+            screenshot_bytes = Path(screenshot_path).read_bytes()
+            payload = {"embeds": [embed], "attachments": [
+                {"id": 0, "filename": "dialog_screenshot.png",
+                 "description": "Dialog that blocked the run"}
+            ]}
+            _send_multipart_payload(
+                webhook_url, payload,
+                [("dialog_screenshot.png", screenshot_bytes)])
+            return
+        except Exception as e:
+            print(f"[report] failed to attach screenshot: {e}")
+
+    _send_embed_only(webhook_url, embed)
+
+
 def _send_embed_only(webhook_url: str, embed: dict) -> None:
     """Send a single embed with no file attachments."""
     body = json.dumps({"embeds": [embed]}).encode("utf-8")

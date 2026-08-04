@@ -157,3 +157,37 @@ def find_comment_input(send_like_xy: tuple[int, int]) -> tuple[int, int]:
     """Comment input sits at a fixed offset above the Send Like button."""
     _, send_y = send_like_xy
     return (int(540 * _S), send_y - int(171 * _S))
+
+
+# ============================================================
+# is_app_loading — detect stuck loading / splash screen
+# ============================================================
+
+def is_app_loading(png: bytes) -> bool:
+    """Check if Hinge is stuck on the loading/splash screen.
+
+    The loading screen is a white backdrop with a small animated logo
+    in the center — the animation creates some pixel variation at
+    center, but the overwhelming majority of the content area is still
+    near-white. A loaded profile has a photo card, text overlays, and
+    UI buttons that fill most of the screen with non-white pixels.
+
+    Uses a simple white-pixel ratio across the full content area
+    (excluding status bar and nav bar). If >75% of pixels are
+    near-white (≥230), it's a loading screen. On a real profile,
+    photos and text bring this well below 50%.
+    """
+    im = np.array(Image.open(io.BytesIO(png)).convert("L"))
+    h, w = im.shape
+    if h < 1500 or w < 950:
+        return False
+
+    # Full content area: exclude status bar (~y=0-150) and nav bar
+    # (~bottom 250px). The animated logo occupies a small fraction of
+    # this region — it won't push white_ratio below the threshold.
+    content = im[150:h - 250, 50:w - 50]
+    if content.size == 0:
+        return False
+
+    white_ratio = (content > 230).mean()
+    return white_ratio > 0.75

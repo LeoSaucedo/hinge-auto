@@ -201,7 +201,7 @@ improvements beyond the original:
 - **Cost tracking** — per-profile and per-session cost estimates in metrics and Discord reports
 - **Randomized cron** — 0-20min jitter per session for anti-detection
 - **Session caps** — configurable min/max likes per session with random roll
-- **Error screenshots** — debug captures on failure saved to `debug/errors/`
+- **Error screenshots** — debug captures on failure saved to `debug/errors/` (override the whole debug output dir via `DEBUG_DIR` in `.env`)
 - **Bot detection evasion** — randomized scroll distance, tap jitter, action delays, session timing
 
 ## License
