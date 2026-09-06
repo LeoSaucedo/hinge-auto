@@ -32,6 +32,10 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
         "output_tokens":   75.00,
     },
     # ---------- Gemini ----------
+    "gemini-3.8-flash": {
+        "input_tokens":     0.75,
+        "output_tokens":    3.75,
+    },
     "gemini-3.5-flash": {
         "input_tokens":     1.50,
         "output_tokens":    9.00,
