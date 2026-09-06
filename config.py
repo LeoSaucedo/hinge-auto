@@ -164,8 +164,11 @@ OLLAMA_HOST = None
 
 # ---------- Gemini settings (when JUDGE_BACKEND == "gemini") ----------
 # GEMINI_API_KEY must be set in .env or environment.
-# Uses gemini-3.1-flash-lite by default (cheapest vision model). Override
-# via GEMINI_MODEL env var or edit the default below.
+# Options (cheapest -> most capable):
+#   "gemini-3.1-flash-lite" — cheapest vision model (default)
+#   "gemini-3.5-flash"       — solid mid-tier
+#   "gemini-3.8-flash"       — most intelligent Flash tier
+# Override via GEMINI_MODEL env var or edit the default below.
 GEMINI_MODEL = "gemini-3.1-flash-lite"
 
 # ---------- Paths ----------
