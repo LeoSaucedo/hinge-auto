@@ -147,7 +147,12 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
                         if candidate.is_file():
                             photo_bytes = candidate.read_bytes()
                             break
-        profile_data.append({"name": name, "msg": msg, "bytes": photo_bytes})
+        profile_data.append({
+            "name": name,
+            "msg": msg,
+            "fit_score": profile.get("fit_score", 0),
+            "bytes": photo_bytes,
+        })
 
     if not profile_data:
         embed = {
