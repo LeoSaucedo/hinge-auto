@@ -37,10 +37,11 @@ Submit your decision via the submit_decision tool."""
 # Generic, voice-neutral fallback used when the active mode does not set
 # MESSAGE_VOICE. Replace by writing a voice file under voice/<name>.py
 # and pointing your mode at it.
-DEFAULT_MESSAGE_VOICE = """## Message rubric (when the profile is a pass)
+DEFAULT_MESSAGE_VOICE = """## Message rubric
 
-Write a short opener that goes out with the like — but ONLY when the
-profile passes (fit_score >= FIT_SCORE_MIN). Empty string otherwise.
+Always write a short opener for this profile. The harness decides whether
+it's actually used — a high fit_score sends it with a like, a low one
+discards it. You don't decide; just draft a best-effort opener.
 
 Aim for: one specific reference to something visible in the profile (a
 prompt answer or a concrete photo detail), followed by a short question
@@ -49,10 +50,11 @@ about it. Keep it friendly and curious. Around 60-120 characters total.
 Constraints:
 - Plain ASCII only. No emoji, no smart quotes, no em-dashes.
 - Avoid the characters \\, ", $, ` — they break the typing layer.
-- Empty string when fit_score is below the threshold (won't be liked).
-- If the profile passes but you cannot write a specific, non-generic
-  opener, output the empty string for `message` and set
-  `message_archetype` to "empty". A like with no message is acceptable.
+- Never leave `message` empty just because you think it'll be skipped —
+  always draft something usable as an opener.
+- Only if you genuinely cannot write a specific, non-generic opener, use
+  the empty string for `message` and set `message_archetype` to "empty".
+  A like with no message is still acceptable.
 
 This is the GENERIC fallback voice. Most users will want to override it
 by setting `MESSAGE_VOICE` in their mode file (or pointing it at a
@@ -89,7 +91,7 @@ DECIDE_INPUT_SCHEMA = {
         "confidence": {
             "type": "string",
             "enum": ["low", "medium", "high"],
-            "description": "How confident you are in the decision.",
+            "description": "How confident you are in the fit_score.",
         },
         "reasoning": {
             "type": "string",
@@ -102,23 +104,21 @@ DECIDE_INPUT_SCHEMA = {
         "message": {
             "type": "string",
             "description": (
-                "The opener to send with the like — write it only when the "
-                "profile is a pass (fit_score >= FIT_SCORE_MIN); empty string "
-                "otherwise. Max ~150 chars, plain ASCII, no emoji. See the "
-                "message rubric in the system prompt."
+                "A short opener for this profile — always write one; the "
+                "harness sends it only with a like. Max ~150 chars, plain "
+                "ASCII, no emoji. See the message rubric in the system prompt."
             ),
         },
         "skip_reason": {
             "type": "string",
             "enum": ["none", "age", "preferences", "low_effort", "other"],
             "description": (
-                "Categorical reason a profile scored poorly / was skipped, "
-                "for downstream analytics. \"age\" when the AGE GATE fired, "
+                "Categorical reason this profile is a poor fit, for "
+                "downstream analytics. \"age\" when the AGE GATE fired, "
                 "\"preferences\" when a specific PREFERENCES rule fired, "
                 "\"low_effort\" when the profile was too thin to engage with "
-                "(no readable prompts, single photo, etc.). \"none\" when not "
-                "applicable (you don't know the harness's threshold), \"other\" "
-                "only if nothing else fits."
+                "(no readable prompts, single photo, etc.). \"none\" when "
+                "nothing specific applies, \"other\" only if nothing else fits."
             ),
         },
         "message_archetype": {
@@ -175,7 +175,7 @@ DECIDE_INPUT_SCHEMA = {
 @dataclass
 class Decision:
     name: str
-    decision: str  # "like" | "skip" | "NOT_A_PROFILE"
+    decision: str  # model: "profile" | "NOT_A_PROFILE"; after gate: "like" | "skip" | "NOT_A_PROFILE"
     confidence: str  # "low" | "medium" | "high"
     reasoning: str
     message: str = ""
@@ -255,17 +255,17 @@ def _premades_section(premades: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _fit_clause(fit_score_min: int) -> str:
+def _fit_clause() -> str:
     return (
         f"\nFIT SCORE: assign a single integer fit_score (0-100) for how well "
         f"this profile matches the user's preferences. Use the full range — don't "
         f"cluster around the middle. 90+ = exact match, 75-89 = strong fit, "
         f"60-74 = decent, 40-59 = neutral, 0-39 = not a fit. Only set "
         f"decision=\"profile\" (or \"NOT_A_PROFILE\" for an overlay). You do NOT "
-        f"choose like vs skip — the run's harness does, like iff fit_score >= "
-        f"{fit_score_min}. Base the score on preferences, profile info, prompt "
-        f"answers, and photos. When genuinely ambiguous, lean toward a lower "
-        f"score.\n"
+        f"choose like vs skip — the run's harness decides that from your "
+        f"fit_score. Always draft an opener (see the message rubric). Base the "
+        f"score on preferences, profile info, prompt answers, and photos. When "
+        f"genuinely ambiguous, lean toward a lower score.\n"
     )
 
 
@@ -275,12 +275,12 @@ def _age_clause(age_min: int | None, age_max: int | None) -> str:
     lo = age_min if age_min is not None else 18
     hi = age_max if age_max is not None else 99
     return (
-        f"\nAGE GATE: only LIKE if the profile's stated age is between "
+        f"\nAGE GATE: only score as a fit if the profile's stated age is between "
         f"{lo} and {hi} inclusive. Hinge shows age in basic-info "
         f"(\"NN\" next to height/location). If age is visible and out of "
-        f"range, decision=skip, skip_reason=\"age\", message=\"\". If age "
-        f"genuinely isn't visible across any frame, proceed with the normal "
-        f"rubric.\n"
+        f"range, set fit_score=0 and skip_reason=\"age\" so the harness skips "
+        f"it. If age genuinely isn't visible across any frame, proceed with "
+        f"the normal rubric.\n"
     )
 
 
@@ -288,7 +288,7 @@ def build_system_prompt() -> str:
     return SYSTEM_PROMPT_TEMPLATE.format(
         preferences=config.PREFERENCES.strip(),
         age_clause=_age_clause(config.AGE_MIN, config.AGE_MAX),
-        fit_clause=_fit_clause(getattr(config, "FIT_SCORE_MIN", 50)),
+        fit_clause=_fit_clause(),
         message_voice=resolve_voice(config.MESSAGE_VOICE).strip(),
         premades_section=_premades_section(config.PREMADES),
     )
@@ -313,12 +313,13 @@ def enforce_premade_verbatim(decision: Decision) -> None:
 
 
 def apply_fit_threshold(decision: Decision) -> Decision:
-    """Gate the like/skip action entirely on fit_score.
+    """Decide like/skip entirely from fit_score and the FIT_SCORE_MIN dial.
 
-    The model's `decision` field is advisory; this re-derives it from
-    config.FIT_SCORE_MIN so pickiness is a configurable dial rather than
-    prompt prose. NOT_A_PROFILE is preserved — dialog/popup recovery relies
-    on it. Clamps fit_score to 0-100 and mutates + returns `decision`.
+    The model never chooses like vs skip — it only scores each profile and
+    always drafts an opener. This is the single place the run decides: like
+    iff fit_score >= config.FIT_SCORE_MIN. NOT_A_PROFILE is preserved so
+    dialog/popup recovery keeps working. Clamps fit_score to 0-100 and
+    mutates + returns `decision`.
     """
     if decision.decision == "NOT_A_PROFILE":
         return decision
@@ -330,8 +331,8 @@ def apply_fit_threshold(decision: Decision) -> Decision:
     decision.fit_score = score
     decision.decision = "like" if score >= config.FIT_SCORE_MIN else "skip"
     if decision.decision == "skip":
-        # An opener must never go out on a skip (e.g. a high-scoring profile
-        # the model misjudged, or a low-scoring one it still drafted for).
+        # The model always drafts an opener; never ship it on a skip. The
+        # harness decides, so an opener on a sub-threshold profile is dropped.
         decision.message = ""
         decision.message_archetype = "empty"
         decision.premade_id = ""
