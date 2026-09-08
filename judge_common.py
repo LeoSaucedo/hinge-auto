@@ -21,10 +21,7 @@ You will be shown a sequence of screenshots representing a single profile, in
 order from top to bottom. The profile may include photos, prompt responses
 (short text), and basic info (age, height, location, job, education, etc.).
 
-Decide LIKE or SKIP based on the user's preferences. Be reasonably selective —
-don't like profiles that clearly don't match, but don't be unreasonably picky
-either. When the profile is genuinely ambiguous, lean SKIP.
-
+{fit_clause}
 IMPORTANT: If any dialog, popup, overlay, or non-profile screen is present
 that covers any part of the profile and prevents you from analyzing it fully —
 including settings panels, subscription upsells, notification prompts, rate-the-app
@@ -80,7 +77,13 @@ DECIDE_INPUT_SCHEMA = {
         "decision": {
             "type": "string",
             "enum": ["like", "skip", "NOT_A_PROFILE"],
-            "description": "Whether to like or skip this profile, or NOT_A_PROFILE if the screenshots don't show a profile at all (dialog, popup, settings, etc.).",
+            "description": "Whether to like or skip this profile, or NOT_A_PROFILE if the screenshots don't show a profile at all (dialog, popup, settings, etc.). Set to 'like' when fit_score >= the run's FIT_SCORE_MIN threshold, else 'skip'.",
+        },
+        "fit_score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "How well this profile fits the user's preferences, 0-100. Use the full range: 90+ = exact match, 75-89 = strong fit, 60-74 = decent, 40-59 = neutral, 0-39 = not a fit. This is the authoritative score the run uses to decide like vs skip.",
         },
         "confidence": {
             "type": "string",
@@ -161,8 +164,8 @@ DECIDE_INPUT_SCHEMA = {
         },
     },
     "required": [
-        "name", "decision", "confidence", "reasoning", "message",
-        "skip_reason", "message_archetype", "premade_id",
+        "name", "decision", "fit_score", "confidence", "reasoning",
+        "message", "skip_reason", "message_archetype", "premade_id",
         "prompt_referenced",
     ],
 }
@@ -171,10 +174,11 @@ DECIDE_INPUT_SCHEMA = {
 @dataclass
 class Decision:
     name: str
-    decision: str  # "like" | "skip"
+    decision: str  # "like" | "skip" | "NOT_A_PROFILE"
     confidence: str  # "low" | "medium" | "high"
     reasoning: str
     message: str = ""
+    fit_score: int = 0  # 0-100, authoritative for like/skip gating
     skip_reason: str = "none"
     message_archetype: str = "empty"
     premade_id: str = ""
@@ -250,6 +254,18 @@ def _premades_section(premades: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _fit_clause(fit_score_min: int) -> str:
+    return (
+        f"\nFIT SCORE: assign a single integer fit_score (0-100) for how well "
+        f"this profile matches the user's preferences. Use the full range — don't "
+        f"cluster around the middle. 90+ = exact match, 75-89 = strong fit, "
+        f"60-74 = decent, 40-59 = neutral, 0-39 = not a fit. Set decision=\"like\" "
+        f"when fit_score >= {fit_score_min}, else decision=\"skip\". Base the score "
+        f"on preferences, profile info, prompt answers, and photos. When genuinely "
+        f"ambiguous, lean toward a lower score.\n"
+    )
+
+
 def _age_clause(age_min: int | None, age_max: int | None) -> str:
     if age_min is None and age_max is None:
         return ""
@@ -269,6 +285,7 @@ def build_system_prompt() -> str:
     return SYSTEM_PROMPT_TEMPLATE.format(
         preferences=config.PREFERENCES.strip(),
         age_clause=_age_clause(config.AGE_MIN, config.AGE_MAX),
+        fit_clause=_fit_clause(getattr(config, "FIT_SCORE_MIN", 50)),
         message_voice=resolve_voice(config.MESSAGE_VOICE).strip(),
         premades_section=_premades_section(config.PREMADES),
     )
@@ -290,6 +307,32 @@ def enforce_premade_verbatim(decision: Decision) -> None:
         f"clearing and treating message as fresh"
     )
     decision.premade_id = ""
+
+
+def apply_fit_threshold(decision: Decision) -> Decision:
+    """Gate the like/skip action entirely on fit_score.
+
+    The model's `decision` field is advisory; this re-derives it from
+    config.FIT_SCORE_MIN so pickiness is a configurable dial rather than
+    prompt prose. NOT_A_PROFILE is preserved — dialog/popup recovery relies
+    on it. Clamps fit_score to 0-100 and mutates + returns `decision`.
+    """
+    if decision.decision == "NOT_A_PROFILE":
+        return decision
+    try:
+        score = max(0, min(100, int(decision.fit_score)))
+    except (TypeError, ValueError):
+        print(f"[judge] WARN: invalid fit_score={decision.fit_score!r}, defaulting to 0")
+        score = 0
+    decision.fit_score = score
+    decision.decision = "like" if score >= config.FIT_SCORE_MIN else "skip"
+    if decision.decision == "skip":
+        # An opener must never go out on a skip (e.g. a high-scoring profile
+        # the model misjudged, or a low-scoring one it still drafted for).
+        decision.message = ""
+        decision.message_archetype = "empty"
+        decision.premade_id = ""
+    return decision
 
 
 def load_backend():

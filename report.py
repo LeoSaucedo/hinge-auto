@@ -118,7 +118,8 @@ def _send_embed_only(webhook_url: str, embed: dict) -> None:
 
 def post_run(likes_sent: int, profiles_seen: int, skips: int,
              total_cost: float, total_duration_s: float,
-             liked_profiles: list[dict] | None = None) -> None:
+             liked_profiles: list[dict] | None = None,
+             avg_fit_score: float = 0.0) -> None:
     """Post profile photos with stats in the first batch, no separate summary."""
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
     if not webhook_url:
@@ -156,8 +157,9 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
                 {"name": "👀 Seen",  "value": str(profiles_seen), "inline": True},
                 {"name": "❤️ Likes", "value": str(likes_sent),    "inline": True},
                 {"name": "⏭️ Skip",  "value": str(skips),         "inline": True},
+                {"name": "🎯 Avg fit", "value": f"{avg_fit_score:.0f}/100", "inline": True},
             ],
-            "footer": {"text": f"${total_cost:.2f} · {total_duration_s:.0f}s"},
+            "footer": {"text": f"${total_cost:.2f} · {total_duration_s:.0f}s · avg fit {avg_fit_score:.0f}/100"},
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
         }
         _send_embed_only(webhook_url, embed)
@@ -176,7 +178,8 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
         start_num = batch_idx * _DISCORD_ATTACHMENT_LIMIT + 1
         end_num = start_num + len(batch) - 1
         profile_lines = "\n".join(
-            f"{start_num + i}. **{p['name']}** — {p['msg']}"
+            f"{start_num + i}. **{p['name']}** — {p['msg']} "
+            f"(fit {p.get('fit_score', 0)}/100)"
             for i, p in enumerate(batch)
         )
 
@@ -188,9 +191,10 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
                     {"name": "👀 Seen",  "value": str(profiles_seen), "inline": True},
                     {"name": "❤️ Likes", "value": str(likes_sent),    "inline": True},
                     {"name": "⏭️ Skip",  "value": str(skips),         "inline": True},
+                    {"name": "🎯 Avg fit", "value": f"{avg_fit_score:.0f}/100", "inline": True},
                     {"name": "Liked", "value": profile_lines, "inline": False},
                 ],
-                "footer": {"text": f"${total_cost:.2f} · {total_duration_s:.0f}s"},
+                "footer": {"text": f"${total_cost:.2f} · {total_duration_s:.0f}s · avg fit {avg_fit_score:.0f}/100"},
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
             }
         else:
@@ -200,7 +204,7 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
                 "fields": [
                     {"name": "Liked", "value": profile_lines, "inline": False},
                 ],
-                "footer": {"text": f"${total_cost:.2f} · {total_duration_s:.0f}s"},
+                "footer": {"text": f"${total_cost:.2f} · {total_duration_s:.0f}s · avg fit {avg_fit_score:.0f}/100"},
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
             }
 

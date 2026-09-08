@@ -68,6 +68,13 @@ MAX_LIKES_PER_SESSION = 8
 SESSION_LIKE_MIN = 0
 MAX_PROFILES_PER_SESSION = 100
 
+# ---------- Pickiness (fit score gate) ----------
+# The judge returns a fit_score (0-100) for every profile. The harness
+# decides LIKE iff fit_score >= FIT_SCORE_MIN, else SKIP. Raise this to be
+# pickier (fewer likes, higher average quality); lower it for more volume.
+# Env override: FIT_SCORE_MIN in .env.
+FIT_SCORE_MIN = 50
+
 # ---------- Device settings ----------
 # Moto e20 real phone is 720x1600. Change if using a different device.
 SCREEN_WIDTH = 720
