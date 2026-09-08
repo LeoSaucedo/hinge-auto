@@ -27,7 +27,7 @@ that covers any part of the profile and prevents you from analyzing it fully —
 including settings panels, subscription upsells, notification prompts, rate-the-app
 nags, or any other interruption — set decision="NOT_A_PROFILE". Use reasoning
 to describe what you're seeing (e.g. "a subscription upsell dialog is blocking
-the profile"). Only return LIKE or SKIP when you can see the full profile.
+the profile"). Only set decision="profile" when you can see the full profile.
 
 {message_voice}
 {premades_section}
@@ -37,9 +37,10 @@ Submit your decision via the submit_decision tool."""
 # Generic, voice-neutral fallback used when the active mode does not set
 # MESSAGE_VOICE. Replace by writing a voice file under voice/<name>.py
 # and pointing your mode at it.
-DEFAULT_MESSAGE_VOICE = """## Message rubric (when decision == "like")
+DEFAULT_MESSAGE_VOICE = """## Message rubric (when the profile is a pass)
 
-Write a short opener that goes out with the like.
+Write a short opener that goes out with the like — but ONLY when the
+profile passes (fit_score >= FIT_SCORE_MIN). Empty string otherwise.
 
 Aim for: one specific reference to something visible in the profile (a
 prompt answer or a concrete photo detail), followed by a short question
@@ -48,10 +49,10 @@ about it. Keep it friendly and curious. Around 60-120 characters total.
 Constraints:
 - Plain ASCII only. No emoji, no smart quotes, no em-dashes.
 - Avoid the characters \\, ", $, ` — they break the typing layer.
-- Empty string when decision == "skip".
-- If you'd lean LIKE but cannot write a specific, non-generic opener,
-  output the empty string for `message` and set `message_archetype` to
-  "empty". A like with no message is acceptable.
+- Empty string when fit_score is below the threshold (won't be liked).
+- If the profile passes but you cannot write a specific, non-generic
+  opener, output the empty string for `message` and set
+  `message_archetype` to "empty". A like with no message is acceptable.
 
 This is the GENERIC fallback voice. Most users will want to override it
 by setting `MESSAGE_VOICE` in their mode file (or pointing it at a
@@ -76,8 +77,8 @@ DECIDE_INPUT_SCHEMA = {
         },
         "decision": {
             "type": "string",
-            "enum": ["like", "skip", "NOT_A_PROFILE"],
-            "description": "Whether to like or skip this profile, or NOT_A_PROFILE if the screenshots don't show a profile at all (dialog, popup, settings, etc.). Set to 'like' when fit_score >= the run's FIT_SCORE_MIN threshold, else 'skip'.",
+            "enum": ["profile", "NOT_A_PROFILE"],
+            "description": "'profile' when the screenshots show a real profile you can score. 'NOT_A_PROFILE' when a dialog, popup, overlay, or non-profile screen blocks full analysis (use reasoning to describe it). Do NOT choose like vs skip — the harness decides that from fit_score.",
         },
         "fit_score": {
             "type": "integer",
@@ -101,23 +102,23 @@ DECIDE_INPUT_SCHEMA = {
         "message": {
             "type": "string",
             "description": (
-                "The opener to send with the like. Required when "
-                "decision == \"like\"; use empty string when skipping. "
-                "Max ~150 chars, plain ASCII, no emoji. See the message "
-                "rubric in the system prompt."
+                "The opener to send with the like — write it only when the "
+                "profile is a pass (fit_score >= FIT_SCORE_MIN); empty string "
+                "otherwise. Max ~150 chars, plain ASCII, no emoji. See the "
+                "message rubric in the system prompt."
             ),
         },
         "skip_reason": {
             "type": "string",
             "enum": ["none", "age", "preferences", "low_effort", "other"],
             "description": (
-                "Categorical skip reason for downstream analytics. "
-                "Use \"none\" when decision == \"like\". "
-                "\"age\" when the AGE GATE clause triggered the skip. "
-                "\"preferences\" when a specific PREFERENCES rule fired. "
-                "\"low_effort\" when the profile was too thin to engage "
-                "with (no readable prompts, single photo, etc.). "
-                "\"other\" only if nothing else fits."
+                "Categorical reason a profile scored poorly / was skipped, "
+                "for downstream analytics. \"age\" when the AGE GATE fired, "
+                "\"preferences\" when a specific PREFERENCES rule fired, "
+                "\"low_effort\" when the profile was too thin to engage with "
+                "(no readable prompts, single photo, etc.). \"none\" when not "
+                "applicable (you don't know the harness's threshold), \"other\" "
+                "only if nothing else fits."
             ),
         },
         "message_archetype": {
@@ -259,10 +260,12 @@ def _fit_clause(fit_score_min: int) -> str:
         f"\nFIT SCORE: assign a single integer fit_score (0-100) for how well "
         f"this profile matches the user's preferences. Use the full range — don't "
         f"cluster around the middle. 90+ = exact match, 75-89 = strong fit, "
-        f"60-74 = decent, 40-59 = neutral, 0-39 = not a fit. Set decision=\"like\" "
-        f"when fit_score >= {fit_score_min}, else decision=\"skip\". Base the score "
-        f"on preferences, profile info, prompt answers, and photos. When genuinely "
-        f"ambiguous, lean toward a lower score.\n"
+        f"60-74 = decent, 40-59 = neutral, 0-39 = not a fit. Only set "
+        f"decision=\"profile\" (or \"NOT_A_PROFILE\" for an overlay). You do NOT "
+        f"choose like vs skip — the run's harness does, like iff fit_score >= "
+        f"{fit_score_min}. Base the score on preferences, profile info, prompt "
+        f"answers, and photos. When genuinely ambiguous, lean toward a lower "
+        f"score.\n"
     )
 
 

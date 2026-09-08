@@ -65,7 +65,7 @@ def _tool_spec() -> dict:
         "type": "function",
         "function": {
             "name": "submit_decision",
-            "description": "Submit a like/skip decision for this Hinge profile.",
+            "description": "Submit a fit-score assessment for this Hinge profile.",
             "parameters": DECIDE_INPUT_SCHEMA,
         },
     }
@@ -105,7 +105,7 @@ def judge(frames: list[bytes]) -> Decision:
 
     user_text = (
         f"Above are {len(frames)} screenshots of one Hinge profile, in order "
-        "from top to bottom. Decide whether to like or skip, and call the "
+        "from top to bottom. Score how well it fits, then call the "
         "submit_decision tool with the structured result."
     )
 
