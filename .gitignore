@@ -27,9 +27,9 @@ calibrate.png
 cron.log
 
 # Personal mode + voice configs (not shared)
-modes/carlos.py
-voice/carlos.py
-voice/carlos_no_msg.py
+# Broad globs so dated variants (e.g. carlos-2026-09-08.py) are also ignored.
+modes/carlos*.py
+voice/carlos*.py
 
 # Test scripts
 test_webhook.py
