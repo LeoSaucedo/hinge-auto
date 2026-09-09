@@ -217,6 +217,7 @@ def save_debug(frames: list[bytes], decision, profile_idx: int) -> str | None:
         f"confidence: {decision.confidence}\n"
         f"reasoning: {decision.reasoning}\n"
         f"message: {decision.message}\n"
+        f"drafted_message: {decision.drafted_message}\n"
         f"message_archetype: {decision.message_archetype}\n"
         f"prompt_referenced: {decision.prompt_referenced}\n"
         f"skip_reason: {decision.skip_reason}\n"
@@ -474,6 +475,8 @@ def main() -> int:
         print(f"Reason:   {decision.reasoning}")
         if decision.message:
             print(f"Message:  {decision.message}")
+        if decision.drafted_message and decision.drafted_message != decision.message:
+            print(f"Drafted:  {decision.drafted_message}  (not sent)")
 
         # ── Dialog / popup detection & recovery ──
         if decision.decision == "NOT_A_PROFILE":

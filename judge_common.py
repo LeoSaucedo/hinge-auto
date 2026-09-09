@@ -179,6 +179,7 @@ class Decision:
     confidence: str  # "low" | "medium" | "high"
     reasoning: str
     message: str = ""
+    drafted_message: str = ""  # what the model wrote before the gate (kept for logs)
     fit_score: int = 0  # 0-100, authoritative for like/skip gating
     skip_reason: str = "none"
     message_archetype: str = "empty"
@@ -330,6 +331,9 @@ def apply_fit_threshold(decision: Decision) -> Decision:
         score = 0
     decision.fit_score = score
     decision.decision = "like" if score >= config.FIT_SCORE_MIN else "skip"
+    # Preserve the model's drafted opener before any discard so it can be
+    # logged for review even when the profile is gated to a skip.
+    decision.drafted_message = decision.message
     if decision.decision == "skip":
         # The model always drafts an opener; never ship it on a skip. The
         # harness decides, so an opener on a sub-threshold profile is dropped.
