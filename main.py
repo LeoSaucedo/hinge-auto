@@ -23,7 +23,7 @@ import config
 import metrics
 import report
 import vision
-from judge_common import load_backend
+from judge_common import apply_fit_threshold, load_backend
 
 judge = load_backend().judge
 
@@ -213,6 +213,7 @@ def save_debug(frames: list[bytes], decision, profile_idx: int) -> str | None:
 
         f"name: {decision.name}\n"
         f"decision: {decision.decision}\n"
+        f"fit_score: {decision.fit_score}\n"
         f"confidence: {decision.confidence}\n"
         f"reasoning: {decision.reasoning}\n"
         f"message: {decision.message}\n"
@@ -328,6 +329,8 @@ def main() -> int:
     profiles_seen = 0
     total_cost = 0.0
     total_seconds = 0.0
+    fit_score_sum = 0
+    fit_score_count = 0
     liked_profiles: list[dict] = []  # tracked for the webhook report
     last_frame0_hash: str | None = None
     duplicate_streak = 0
@@ -459,8 +462,15 @@ def main() -> int:
             continue
 
         print(f"Name:     {decision.name}")
+
+        # ── Pickiness gate: like iff fit_score >= FIT_SCORE_MIN ──
+        # The model's decision is advisory; the run's threshold is authoritative.
+        # NOT_A_PROFILE is preserved by apply_fit_threshold for recovery below.
+        decision = apply_fit_threshold(decision)
+
         print(f"Decision: {decision.decision} ({decision.confidence}) "
               f"[{decision.skip_reason if decision.decision == 'skip' else decision.message_archetype}]")
+        print(f"Fit:      {decision.fit_score}/100 (threshold {config.FIT_SCORE_MIN})")
         print(f"Reason:   {decision.reasoning}")
         if decision.message:
             print(f"Message:  {decision.message}")
@@ -500,6 +510,9 @@ def main() -> int:
         else:
             dialog_streak = 0
 
+        fit_score_sum += decision.fit_score
+        fit_score_count += 1
+
         folder_name = save_debug(frames, decision, profiles_seen)
 
         t2 = time.monotonic()
@@ -509,6 +522,7 @@ def main() -> int:
                 liked_profiles.append({
                     "name": decision.name,
                     "message": decision.message,
+                    "fit_score": decision.fit_score,
                     "index": profiles_seen,
                     "folder": folder_name,
                 })
@@ -538,15 +552,19 @@ def main() -> int:
         metrics.log_profile(profiles_seen, decision, timing)
         total_cost += metrics.estimated_cost(decision.usage)
         total_seconds += timing["total_seconds"]
+        avg_fit = (fit_score_sum / fit_score_count) if fit_score_count else 0
         metrics.print_running_totals(
             profiles_seen, likes_sent, skips, total_cost, total_seconds,
+            avg_fit_score=avg_fit,
         )
 
-    print(f"\nDone. {likes_sent} likes sent across {profiles_seen} profiles.")
+    avg_fit = (fit_score_sum / fit_score_count) if fit_score_count else 0
+    print(f"\nDone. {likes_sent} likes sent across {profiles_seen} profiles "
+          f"(avg fit {avg_fit:.0f}/100).")
 
     # Post-run report to Discord webhook (if configured)
     report.post_run(likes_sent, profiles_seen, skips, total_cost, total_seconds,
-                    liked_profiles)
+                    liked_profiles, avg_fit_score=avg_fit)
 
     # Cleanup: force-stop Hinge so next run starts fresh regardless of app state,
     # then turn screen off.

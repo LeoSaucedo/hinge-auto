@@ -20,7 +20,7 @@ from judge_common import (
 
 DECIDE_TOOL = {
     "name": "submit_decision",
-    "description": "Submit a like/skip decision for this Hinge profile.",
+    "description": "Submit a fit-score assessment for this Hinge profile.",
     "input_schema": DECIDE_INPUT_SCHEMA,
 }
 
@@ -45,7 +45,7 @@ def judge(frames: list[bytes]) -> Decision:
         "type": "text",
         "text": (
             f"Above are {len(frames)} screenshots of one Hinge profile, in order "
-            "from top to bottom. Decide whether to like or skip."
+            "from top to bottom. Score how well it fits the user."
         ),
     })
 
