@@ -69,27 +69,59 @@ def swipe(x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
           str(x1), str(y1), str(x2), str(y2), str(duration_ms)])
 
 
+# Android's back gesture listens in strips along the left and right screen
+# edges, so scroll swipes stay inside this fraction of the width. Always
+# swiping down the dead center of the screen is its own bot fingerprint —
+# a session sends ~150 of these — so the x is drawn fresh per gesture.
+_SCROLL_EDGE_GUARD = 0.15
+# Sideways drift between a swipe's start and end x, as a fraction of screen
+# width. Real thumbs arc slightly instead of traveling perfectly vertically.
+_SCROLL_X_DRIFT = 0.05
+# Vertical jitter on both endpoints, as a fraction of screen height, so the
+# gesture doesn't always begin at the same y.
+_SCROLL_Y_JITTER = 0.03
+
+
+def _scroll_span() -> tuple[int, int]:
+    """Return a jittered (start_x, end_x) for a scroll swipe.
+
+    The start x is drawn from the middle 70% of the screen width; the end x
+    drifts a little sideways from it. Both are clamped to the edge guard so
+    no endpoint lands in Android's back-gesture strips.
+    """
+    lo = config.SCREEN_WIDTH * _SCROLL_EDGE_GUARD
+    hi = config.SCREEN_WIDTH - lo
+    drift = config.SCREEN_WIDTH * _SCROLL_X_DRIFT
+    sx = random.uniform(lo, hi)
+    ex = min(max(sx + random.uniform(-drift, drift), lo), hi)
+    return int(sx), int(ex)
+
+
+def _scroll_y_offset() -> int:
+    """Vertical jitter for a scroll swipe, applied to both endpoints."""
+    jitter = int(config.SCREEN_HEIGHT * _SCROLL_Y_JITTER)
+    return random.randint(-jitter, jitter)
+
+
 def scroll_down() -> None:
     c = config.COORDS
     # Vary scroll distance 80-120% to avoid identical gestures
     scale = random.uniform(0.8, 1.2)
-    sx = int(c["scroll_from"][0])
     sy = int(c["scroll_from"][1])
-    ex = int(c["scroll_to"][0])
-    ey = int(c["scroll_to"][1])
-    dy = int((sy - ey) * scale)
-    swipe(sx, sy, sx, sy - dy, c["scroll_duration_ms"])
+    dy = int((sy - int(c["scroll_to"][1])) * scale)
+    sx, ex = _scroll_span()
+    sy += _scroll_y_offset()
+    swipe(sx, sy, ex, sy - dy, c["scroll_duration_ms"])
 
 
 def scroll_up() -> None:
     c = config.COORDS
     scale = random.uniform(0.8, 1.2)
-    sx = int(c["scroll_to"][0])
     sy = int(c["scroll_to"][1])
-    ex = int(c["scroll_from"][0])
-    ey = int(c["scroll_from"][1])
-    dy = int((ey - sy) * scale)
-    swipe(sx, sy, sx, sy + dy, c["scroll_duration_ms"])
+    dy = int((int(c["scroll_from"][1]) - sy) * scale)
+    sx, ex = _scroll_span()
+    sy += _scroll_y_offset()
+    swipe(sx, sy, ex, sy + dy, c["scroll_duration_ms"])
 
 
 def jitter_sleep(key: str) -> None:
