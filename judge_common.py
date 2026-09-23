@@ -1,7 +1,8 @@
 """Backend-agnostic pieces of the judging pipeline.
 
-Both `judge.py` (Anthropic) and `judge_ollama.py` (Ollama) import from
-here so the system prompt, decision shape, and tool schema stay in sync.
+Every backend module (`judge.py`, `judge_deepseek.py`, `judge_gemini.py`,
+`judge_ollama.py`) imports from here so the system prompt, decision shape,
+and tool schema stay in sync.
 
 A backend module needs to expose `judge(frames: list[bytes]) -> Decision`.
 """
@@ -188,6 +189,40 @@ class Decision:
     usage: dict[str, Any] = field(default_factory=dict)
 
 
+def decision_from_tool_args(args: dict, usage: dict) -> Decision:
+    """Build a Decision from a tool-call argument dict, tolerating mild
+    schema drift (non-Anthropic backends miss keys more often than Claude).
+
+    Used by the OpenAI-compatible backends (Ollama, DeepSeek). Missing
+    fields fall back to safe defaults; enum-like fields are clamped to
+    allowed values so a stray value can't break the loop.
+    """
+    defaults = {
+        "name": "unknown",
+        # Missing/odd verdicts are treated as a scoreable profile — the
+        # fit-score gate downstream is what decides like vs skip.
+        "decision": "profile",
+        "fit_score": 0,
+        "confidence": "low",
+        "reasoning": "",
+        "message": "",
+        "skip_reason": "other",
+        "message_archetype": "empty",
+        "premade_id": "",
+        "prompt_referenced": "",
+    }
+    merged = {**defaults, **{k: v for k, v in args.items() if k in defaults}}
+    # Clamp the model's profile/NOT_A_PROFILE verdict — NOT_A_PROFILE must
+    # survive so main.py's dialog recovery still fires. Anything else
+    # (including a stray like/skip) is treated as a scoreable profile;
+    # like vs skip is decided downstream by apply_fit_threshold.
+    if merged["decision"] != "NOT_A_PROFILE":
+        merged["decision"] = "profile"
+    if merged["confidence"] not in ("low", "medium", "high"):
+        merged["confidence"] = "low"
+    return Decision(**merged, usage=usage)
+
+
 def resolve_voice(voice: str | None) -> str:
     """Resolve the active mode's MESSAGE_VOICE into a prompt string.
 
@@ -355,6 +390,10 @@ def load_backend():
     if backend == "gemini":
         import judge_gemini
         return judge_gemini
+    if backend == "deepseek":
+        import judge_deepseek
+        return judge_deepseek
     raise ValueError(
-        f"Unknown JUDGE_BACKEND={backend!r}. Use 'anthropic', 'ollama', or 'gemini'."
+        f"Unknown JUDGE_BACKEND={backend!r}. Use 'anthropic', 'deepseek', "
+        f"'gemini', or 'ollama'."
     )

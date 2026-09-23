@@ -52,6 +52,16 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
         "input_tokens":     0.30,
         "output_tokens":    1.00,
     },
+    # ---------- DeepSeek ----------
+    # deepseek-flash, peak rates. Peak windows are 01:00-04:00 and
+    # 06:00-10:00 UTC on weekdays; everything else (and all weekend) is
+    # off-peak at half these rates.
+    # Cached input is billed far cheaper ($0.003-0.006/1M), but it's
+    # reported inside input_tokens here, so estimates run slightly high.
+    "deepseek-flash": {
+        "input_tokens":     0.30,
+        "output_tokens":    1.20,
+    },
     # ---------- Ollama ----------
     "qwen2.5-vl": {
         "input_tokens":     0.0,   # free / local
@@ -71,6 +81,8 @@ def _resolve_model_name() -> str:
         return getattr(config, "MODEL", "claude-sonnet-4-6")
     if backend == "gemini":
         return getattr(config, "GEMINI_MODEL", "gemini-3.1-flash-lite")
+    if backend == "deepseek":
+        return getattr(config, "DEEPSEEK_MODEL", "deepseek-flash")
     if backend == "ollama":
         return getattr(config, "OLLAMA_MODEL", "qwen2.5-vl")
     return "unknown"
