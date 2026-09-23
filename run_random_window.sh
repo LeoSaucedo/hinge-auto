@@ -29,7 +29,7 @@ sleep "$delay"
 echo "[$(date)] Starting run..."
 require_ssd  # re-check: the sleep above can outlast an unplug
 source .venv/bin/activate
-python -u main.py --mode carlos 2>&1
+python -u main.py 2>&1
 EXIT_CODE=$?
 echo "[$(date)] Done (exit $EXIT_CODE)"
 exit $EXIT_CODE
