@@ -7,6 +7,7 @@ and tool schema stay in sync.
 A backend module needs to expose `judge(frames: list[bytes]) -> Decision`.
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,8 +21,8 @@ The user's preferences:
 {age_clause}
 You will be shown a sequence of screenshots representing a single profile, in
 order from top to bottom. The profile may include photos, prompt responses
-(short text), and basic info (age, height, location, job, education, etc.).
-
+(short text), and basic info (age, height, job, education, etc.).
+{location_clause}
 {fit_clause}
 IMPORTANT: If any dialog, popup, overlay, or non-profile screen is present
 that covers any part of the profile and prevents you from analyzing it fully —
@@ -320,10 +321,28 @@ def _age_clause(age_min: int | None, age_max: int | None) -> str:
     )
 
 
+def _location_clause() -> str:
+    """Tell the model to disregard location.
+
+    Dropping "location" from the profile-info list isn't enough on its own:
+    Hinge renders a hometown and a distance right in the basic info, so the
+    judge reads them off the screenshots whether or not we name the field.
+    This clause is the half that actually does the work.
+    """
+    return (
+        "\nLOCATION: ignore it. Hinge shows a hometown and a distance "
+        '("3 miles away") in the basic info — treat both as decoration, not '
+        "as evidence for or against the profile. Never let location, "
+        "hometown, neighborhood, or proximity affect fit_score, and don't "
+        "mention them in your reasoning or in the opener you draft.\n"
+    )
+
+
 def build_system_prompt() -> str:
     return SYSTEM_PROMPT_TEMPLATE.format(
         preferences=config.PREFERENCES.strip(),
         age_clause=_age_clause(config.AGE_MIN, config.AGE_MAX),
+        location_clause=_location_clause(),
         fit_clause=_fit_clause(),
         message_voice=resolve_voice(config.MESSAGE_VOICE).strip(),
         premades_section=_premades_section(config.PREMADES),
@@ -376,6 +395,90 @@ def apply_fit_threshold(decision: Decision) -> Decision:
         decision.message_archetype = "empty"
         decision.premade_id = ""
     return decision
+
+
+# ── Fatal judge errors ────────────────────────────────────────────────
+# Errors that will NOT clear on a retry. Retrying them burns Hinge swipes
+# blind: a judge that fails all three attempts falls through to a
+# force-skip, so a dead API key or an empty balance silently skips every
+# profile in the feed until the daily quota is gone. (Seen once on
+# Anthropic when the credit balance hit zero mid-run — 124 profiles were
+# skipped before anyone noticed.)
+#
+# Classify by HTTP status where one exists; that's the only
+# backend-independent signal. Providers word the same failure differently
+# (Anthropic: "credit balance is too low", DeepSeek: "Insufficient
+# Balance"), so message text is a fallback, not the primary key.
+FATAL_STATUS_CODES = frozenset({
+    400,  # malformed request / unsupported parameter — a config bug, not a blip
+    401,  # bad or missing API key
+    402,  # payment required — DeepSeek's "Insufficient Balance"
+    403,  # key is valid but not permitted for this call
+    404,  # model not found
+    422,  # unprocessable request — also a request-shape bug
+})
+
+# Catches backends that only put the code in the text, e.g.
+# judge_deepseek.py's RuntimeError("DeepSeek API error 402: {...}").
+_STATUS_IN_TEXT = re.compile(r"(?:API|HTTP|status)\D{0,10}(\d{3})\b", re.IGNORECASE)
+
+# Last resort, for errors carrying neither a status attribute nor a
+# parseable one in the message.
+_FATAL_PHRASES = (
+    "credit balance is too low",
+    "insufficient balance",
+    "insufficient_quota",
+    "authentication_error",
+    "invalid_api_key",
+    "permission_error",
+    "invalid_request_error",
+    "model not found",
+    # Shared tail of the "<NAME>_API_KEY not set. Add it to .env or export
+    # it." guard in judge_gemini.py and judge_deepseek.py. A missing key
+    # never clears on retry, and without this the loop spends all three
+    # attempts failing before blindly skipping every profile in the feed.
+    "not set. add it to .env",
+)
+
+
+def _http_status(exc: BaseException) -> int | None:
+    """Best-effort HTTP status for an exception from any backend."""
+    for attr in ("status_code", "status", "http_status"):
+        val = getattr(exc, attr, None)
+        if isinstance(val, int):
+            return val
+    # requests/httpx style: HTTPStatusError carries .response.status_code
+    val = getattr(getattr(exc, "response", None), "status_code", None)
+    return val if isinstance(val, int) else None
+
+
+def is_fatal_judge_error(exc: BaseException) -> bool:
+    """True if `exc` won't clear on retry, so the run should halt.
+
+    Walks the exception chain, because backends and vendor SDKs wrap the
+    interesting error (`raise X from e`) and the status usually sits on an
+    inner link rather than the one the caller catches.
+    """
+    seen = set()
+    cur = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+
+        status = _http_status(cur)
+        if status is not None and status in FATAL_STATUS_CODES:
+            return True
+
+        text = str(cur)
+        for match in _STATUS_IN_TEXT.finditer(text):
+            if int(match.group(1)) in FATAL_STATUS_CODES:
+                return True
+
+        lowered = text.lower()
+        if any(phrase in lowered for phrase in _FATAL_PHRASES):
+            return True
+
+        cur = cur.__cause__ or cur.__context__
+    return False
 
 
 def load_backend():

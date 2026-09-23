@@ -106,9 +106,13 @@ COORDS = {
     # Compose box (anchors to the element whose heart was tapped; these
     # values are mostly fallbacks — vision.py re-finds them at tap-time
     # because the box shifts per profile).
+    #
+    # There is deliberately no close-button coordinate here. The compose
+    # overlay has no close control of its own: the only X on screen is
+    # skip_button, which floats above the card and dismisses it by advancing
+    # the feed. do_like's failure path relies on that via do_skip().
     "send_like_button":  (463, 872),
     "comment_input":     (333, 753),
-    "compose_close":     (650, 135),
 
     # Scroll gesture (swipe up = scroll down through profile). Only the y
     # values are read: the live x is re-randomized per gesture within a

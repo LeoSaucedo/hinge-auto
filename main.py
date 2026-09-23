@@ -23,13 +23,15 @@ import config
 import metrics
 import report
 import vision
-from judge_common import apply_fit_threshold, load_backend
+from judge_common import apply_fit_threshold, is_fatal_judge_error, load_backend
 
 judge = load_backend().judge
 
-# Set by do_like() once a like is confirmed sent. A sent like advances Hinge
-# to a fresh profile already rendered at the top of the feed, so the next
-# capture_profile() can skip its defensive scroll-back. Consumed on read.
+# Set once an action has advanced the feed to a fresh profile rendered at the
+# top of the screen — either a confirmed like (do_like) or a skip tap
+# (do_skip). The next capture_profile() can then skip its defensive
+# scroll-back, which would otherwise burn 3-8 swipes on a profile that is
+# already at the top. Consumed on read.
 _feed_at_top = False
 
 
@@ -56,13 +58,13 @@ def capture_profile() -> list[bytes]:
         raise RuntimeError("app stuck on loading screen")
 
     if _feed_at_top:
-        # Last action was a confirmed like, which advanced the feed to a
-        # fresh profile already rendered at the top — the scroll-back
-        # below would burn 3-8 swipes on nothing. Pause instead, so the
-        # new profile still gets the beat to render that the swipes used
-        # to provide (an unrendered feed reads as a stuck loading screen
-        # and force-restarts the app).
-        print("Feed advanced after confirmed like — already at top.")
+        # The last action (confirmed like or skip) advanced the feed to a
+        # fresh profile already rendered at the top — the scroll-back below
+        # would burn 3-8 swipes on nothing. Pause instead, so the new profile
+        # still gets the beat to render that the swipes used to provide (an
+        # unrendered feed reads as a stuck loading screen and force-restarts
+        # the app).
+        print("Feed already at top after last action — skipping scroll-back.")
         time.sleep(1.5)
         _feed_at_top = False
     else:
@@ -106,9 +108,15 @@ def scroll_back_to_top(swipes: int | None = None) -> None:
 def do_skip() -> None:
     """Tap the X to advance to the next profile. Always taps (even in dry run);
     advancing is needed for the loop to see new profiles."""
+    global _feed_at_top
     x, y = config.COORDS["skip_button"]
     adb.tap(x, y)
     adb.jitter_sleep("after_skip")
+    # A skip advances the feed the same way a sent like does: the next profile
+    # renders already at the top. Flag it only after the tap returns — if
+    # adb.tap itself failed there's no new profile to be at the top of, and
+    # leaving the flag clear keeps the defensive scroll-back for that case.
+    _feed_at_top = True
 
 
 def _dismiss_compose_card_if_visible() -> None:
@@ -208,12 +216,16 @@ def do_like(message: str = "") -> None:
         time.sleep(1.5)
         if vision.find_send_like(adb.screenshot()) is not None:
             save_error_screenshot("like-not-confirmed")
-            cx, cy = config.COORDS["compose_close"]
-            print(f"⚠️  Send Like didn't take — compose card still open. "
-                  f"Closing it at ({cx}, {cy}) so it isn't blamed on the "
-                  f"next profile.")
-            adb.tap(cx, cy)
-            adb.jitter_sleep("after_tap")
+            # Deliberately no attempt to close the card here. The compose
+            # overlay has no close control of its own — the only X on screen
+            # is skip_button, which floats above the card and dismisses it by
+            # advancing the feed. Raising hands off to main's handler, which
+            # calls do_skip() and does exactly that.
+            #
+            # (An earlier version tapped COORDS["compose_close"] = (650, 135)
+            # here. Measured against the saved debug corpus, that point is the
+            # "Dating Intent" filter chip on every card screenshot we have —
+            # it opened a second overlay instead of clearing the first.)
             raise RuntimeError(
                 "like not confirmed: compose card still open after Send Like tap"
             )
@@ -485,15 +497,10 @@ def main() -> int:
                 # Halt on errors that won't recover with a retry — burning
                 # through Hinge swipes blind (force-skipping every profile
                 # without a real decision) eats the daily quota and looks
-                # robotic to Hinge. Saw this once when the Anthropic credit
-                # balance hit zero mid-run: 124 profiles got blindly skipped
-                # before we noticed.
-                if any(s in err for s in (
-                    "credit balance is too low",
-                    "authentication_error",
-                    "invalid_api_key",
-                    "permission_error",
-                )):
+                # robotic to Hinge. Classification keys off HTTP status and
+                # walks the exception chain, so it covers every backend
+                # instead of matching Anthropic's wording only.
+                if is_fatal_judge_error(e):
                     fatal_error = err
                     break
                 if attempt < 2:
