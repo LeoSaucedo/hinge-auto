@@ -336,6 +336,7 @@ def main() -> int:
     last_frame0_hash: str | None = None
     duplicate_streak = 0
     dialog_streak = 0
+    hit_like_cap = False
 
     while profiles_seen < config.MAX_PROFILES_PER_SESSION:
         profiles_seen += 1
@@ -532,7 +533,9 @@ def main() -> int:
                 likes_sent += 1
                 if likes_sent >= session_like_cap:
                     print(f"Hit max likes cap ({session_like_cap}). Stopping.")
-                    break
+                    # Don't break here — the profile still needs its log
+                    # record + cost tally below (metrics.log_profile).
+                    hit_like_cap = True
             except Exception as e:
                 save_error_screenshot(f"do-like-failed-{profiles_seen}")
                 print(f"do_like failed: {e!r} — recovering by skipping this profile.")
@@ -560,6 +563,9 @@ def main() -> int:
             profiles_seen, likes_sent, skips, total_cost, total_seconds,
             avg_fit_score=avg_fit,
         )
+
+        if hit_like_cap:
+            break
 
     avg_fit = (fit_score_sum / fit_score_count) if fit_score_count else 0
     print(f"\nDone. {likes_sent} likes sent across {profiles_seen} profiles "
