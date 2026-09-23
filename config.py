@@ -184,7 +184,6 @@ GEMINI_MODEL = "gemini-3.1-flash-lite"
 # ---------- Paths ----------
 BASE_DIR = Path(__file__).parent
 DEBUG_DIR = BASE_DIR / "debug"
-SCREENSHOTS_DIR = BASE_DIR / "screenshots"
 SAVE_DEBUG_FRAMES = True  # keep frames + decisions in debug/ for review
 
 
