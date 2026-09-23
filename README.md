@@ -121,7 +121,7 @@ To write your own:
 
 ## Backends
 
-The judge pipeline supports three interchangeable backends set via
+The judge pipeline supports four interchangeable backends set via
 `JUDGE_BACKEND` in `config.py`. All share the same system prompt, schema, and
 `Decision` shape (in `judge_common.py`) — only the API call differs.
 
@@ -139,6 +139,19 @@ Uses Google Gemini via Gemini API. Good quality at lower cost.
 
 Setup: `GEMINI_API_KEY` in `.env`. Override model via `GEMINI_MODEL`.
 
+### `"deepseek"` (cheap, OpenAI-compatible)
+
+Uses DeepSeek's OpenAI-compatible API (`deepseek-flash`, vision-capable)
+with a forced tool call. Measured **~$0.0015–$0.003 per profile** on a
+7-frame profile (off-peak rates are half the peak ones) — roughly a tenth
+of the Anthropic backend's cost, and cheaper than the mid-tier Gemini
+flash models.
+
+Setup: `DEEPSEEK_API_KEY` in `.env`. Override model via `DEEPSEEK_MODEL`
+(only `deepseek-flash` has vision — `deepseek-v4-pro` does not).
+`DEEPSEEK_THINKING=true` trades the guaranteed tool call for extra
+reasoning; see the header of `judge_deepseek.py` for the tradeoff.
+
 ### `"ollama"` (free — local or cloud)
 
 Uses an open-weight vision model through Ollama. No per-token cost.
@@ -149,9 +162,10 @@ Ollama at `http://localhost:11434`.
 ## Architecture
 
 ```
-ADB capture    →  frame stitching  →  LLM judge        →  action
-   adb.py          config / main       judge.py             main.py
-                                       judge_gemini.py      adb.py
+ADB capture    →  frame stitching  →  LLM judge         →  action
+   adb.py          config / main       judge.py              main.py
+                                       judge_deepseek.py     adb.py
+                                       judge_gemini.py
                                        judge_ollama.py
                                        vision.py
                                        judge_common.py
@@ -165,6 +179,7 @@ ADB capture    →  frame stitching  →  LLM judge        →  action
 | **`main.py`** | The orchestration loop. For each profile: scroll-to-top, capture N frames, run through judge, then skip or like + message. Error handling with screenshot capture, recovery via skip. |
 | **`judge_common.py`** | Backend-agnostic pipeline: system prompt template, JSON tool schema, `Decision` dataclass, voice resolver, and `load_backend()` dispatcher. |
 | **`judge.py`** | Anthropic Claude backend — vision + forced tool call. |
+| **`judge_deepseek.py`** | DeepSeek backend — vision + forced tool call (OpenAI-compatible REST, no SDK). |
 | **`judge_gemini.py`** | Google Gemini backend — vision + function declaration. |
 | **`judge_ollama.py`** | Ollama backend (cloud or local). |
 | **`vision.py`** | Finds UI elements via pixel-level template matching: heart icon on photo 1, Send Like button, comment input area. |

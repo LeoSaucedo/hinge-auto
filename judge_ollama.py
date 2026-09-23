@@ -35,6 +35,7 @@ from judge_common import (
     DECIDE_INPUT_SCHEMA,
     Decision,
     build_system_prompt,
+    decision_from_tool_args,
     enforce_premade_verbatim,
 )
 
@@ -73,29 +74,6 @@ def _tool_spec() -> dict:
 
 def _images_b64(frames: list[bytes]) -> list[str]:
     return [base64.standard_b64encode(f).decode("utf-8") for f in frames]
-
-
-def _decision_from_args(args: dict, usage: dict) -> Decision:
-    """Build Decision from a tool-call argument dict, tolerating mild
-    schema drift (open models miss keys more often than Claude)."""
-    defaults = {
-        "name": "unknown",
-        "decision": "skip",
-        "confidence": "low",
-        "reasoning": "",
-        "message": "",
-        "skip_reason": "other",
-        "message_archetype": "empty",
-        "premade_id": "",
-        "prompt_referenced": "",
-    }
-    merged = {**defaults, **{k: v for k, v in args.items() if k in defaults}}
-    # Clamp enum-like fields to allowed values
-    if merged["decision"] not in ("like", "skip"):
-        merged["decision"] = "skip"
-    if merged["confidence"] not in ("low", "medium", "high"):
-        merged["confidence"] = "low"
-    return Decision(**merged, usage=usage)
 
 
 def judge(frames: list[bytes]) -> Decision:
@@ -149,7 +127,7 @@ def judge(frames: list[bytes]) -> Decision:
                 args = json.loads(args)
             except json.JSONDecodeError:
                 args = {}
-        decision = _decision_from_args(args, usage)
+        decision = decision_from_tool_args(args, usage)
         enforce_premade_verbatim(decision)
         return decision
 
@@ -165,7 +143,7 @@ def judge(frames: list[bytes]) -> Decision:
         if start >= 0 and end > start:
             try:
                 data = json.loads(content[start : end + 1])
-                decision = _decision_from_args(data, usage)
+                decision = decision_from_tool_args(data, usage)
                 enforce_premade_verbatim(decision)
                 return decision
             except json.JSONDecodeError:

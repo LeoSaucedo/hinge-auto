@@ -27,6 +27,11 @@ from judge_common import apply_fit_threshold, load_backend
 
 judge = load_backend().judge
 
+# Set by do_like() once a like is confirmed sent. A sent like advances Hinge
+# to a fresh profile already rendered at the top of the feed, so the next
+# capture_profile() can skip its defensive scroll-back. Consumed on read.
+_feed_at_top = False
+
 
 def _profile_region_hash(png: bytes) -> str:
     """md5 over a cropped region of the frame, excluding status bar (clock
@@ -41,6 +46,8 @@ def _profile_region_hash(png: bytes) -> str:
 
 def capture_profile() -> list[bytes]:
     """Scroll through the current profile, returning a list of PNG frames."""
+    global _feed_at_top
+
     # Check for stuck loading screen BEFORE any scrolls or interactions.
     # Saves ~3-8 wasted scroll-up swipes + avoids burning API credits
     # judging a loading screen as if it were a profile.
@@ -48,11 +55,22 @@ def capture_profile() -> list[bytes]:
     if vision.is_app_loading(initial):
         raise RuntimeError("app stuck on loading screen")
 
-    # Defensive: new profiles load at the top, so this is just guarding
-    # against the app being mid-scroll from a prior partial action. A
-    # handful of swipes is enough — full 18-swipe sweep isn't needed
-    # because we aren't recovering from a 7-frame scroll-down.
-    scroll_back_to_top(swipes=random.randint(3, 8))
+    if _feed_at_top:
+        # Last action was a confirmed like, which advanced the feed to a
+        # fresh profile already rendered at the top — the scroll-back
+        # below would burn 3-8 swipes on nothing. Pause instead, so the
+        # new profile still gets the beat to render that the swipes used
+        # to provide (an unrendered feed reads as a stuck loading screen
+        # and force-restarts the app).
+        print("Feed advanced after confirmed like — already at top.")
+        time.sleep(1.5)
+        _feed_at_top = False
+    else:
+        # Defensive: new profiles load at the top, so this is just guarding
+        # against the app being mid-scroll from a prior partial action. A
+        # handful of swipes is enough — full 18-swipe sweep isn't needed
+        # because we aren't recovering from a 7-frame scroll-down.
+        scroll_back_to_top(swipes=random.randint(3, 8))
 
     frames = []
     frames.append(adb.screenshot())
@@ -110,6 +128,8 @@ def _dismiss_compose_card_if_visible() -> None:
 def do_like(message: str = "") -> None:
     """Flow: scroll to top → tap heart → type message → dismiss keyboard → find + click Send Like.
     """
+    global _feed_at_top
+
     if config.DRY_RUN:
         do_skip()
         return
@@ -175,6 +195,31 @@ def do_like(message: str = "") -> None:
     # next profile and block heart / Send Like detection.
     if adb.dismiss_keyboard_if_visible():
         print("Keyboard was still open after like — dismissed.")
+
+    # ── 8. Confirm the like actually went out ──
+    # A sent like dismisses the compose card and advances the feed; a like
+    # that didn't take leaves the card (and its Send Like button) on screen.
+    # Reuse find_send_like as the signal — measured on the saved debug
+    # corpus it scores 0.997 on open cards vs <=0.415 on live profiles, so
+    # the 0.85 threshold has a wide margin either side.
+    if vision.find_send_like(adb.screenshot()) is not None:
+        # One more beat before calling it: a card that's mid-dismiss can
+        # still register. Only the failure path pays this second look.
+        time.sleep(1.5)
+        if vision.find_send_like(adb.screenshot()) is not None:
+            save_error_screenshot("like-not-confirmed")
+            cx, cy = config.COORDS["compose_close"]
+            print(f"⚠️  Send Like didn't take — compose card still open. "
+                  f"Closing it at ({cx}, {cy}) so it isn't blamed on the "
+                  f"next profile.")
+            adb.tap(cx, cy)
+            adb.jitter_sleep("after_tap")
+            raise RuntimeError(
+                "like not confirmed: compose card still open after Send Like tap"
+            )
+
+    # Confirmed — the feed has advanced to a new profile at the top.
+    _feed_at_top = True
 
 
 def _recover_from_dialog() -> None:
@@ -336,6 +381,7 @@ def main() -> int:
     last_frame0_hash: str | None = None
     duplicate_streak = 0
     dialog_streak = 0
+    hit_like_cap = False
 
     while profiles_seen < config.MAX_PROFILES_PER_SESSION:
         profiles_seen += 1
@@ -532,7 +578,9 @@ def main() -> int:
                 likes_sent += 1
                 if likes_sent >= session_like_cap:
                     print(f"Hit max likes cap ({session_like_cap}). Stopping.")
-                    break
+                    # Don't break here — the profile still needs its log
+                    # record + cost tally below (metrics.log_profile).
+                    hit_like_cap = True
             except Exception as e:
                 save_error_screenshot(f"do-like-failed-{profiles_seen}")
                 print(f"do_like failed: {e!r} — recovering by skipping this profile.")
@@ -560,6 +608,9 @@ def main() -> int:
             profiles_seen, likes_sent, skips, total_cost, total_seconds,
             avg_fit_score=avg_fit,
         )
+
+        if hit_like_cap:
+            break
 
     avg_fit = (fit_score_sum / fit_score_count) if fit_score_count else 0
     print(f"\nDone. {likes_sent} likes sent across {profiles_seen} profiles "
