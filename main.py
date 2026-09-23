@@ -216,12 +216,16 @@ def do_like(message: str = "") -> None:
         time.sleep(1.5)
         if vision.find_send_like(adb.screenshot()) is not None:
             save_error_screenshot("like-not-confirmed")
-            cx, cy = config.COORDS["compose_close"]
-            print(f"⚠️  Send Like didn't take — compose card still open. "
-                  f"Closing it at ({cx}, {cy}) so it isn't blamed on the "
-                  f"next profile.")
-            adb.tap(cx, cy)
-            adb.jitter_sleep("after_tap")
+            # Deliberately no attempt to close the card here. The compose
+            # overlay has no close control of its own — the only X on screen
+            # is skip_button, which floats above the card and dismisses it by
+            # advancing the feed. Raising hands off to main's handler, which
+            # calls do_skip() and does exactly that.
+            #
+            # (An earlier version tapped COORDS["compose_close"] = (650, 135)
+            # here. Measured against the saved debug corpus, that point is the
+            # "Dating Intent" filter chip on every card screenshot we have —
+            # it opened a second overlay instead of clearing the first.)
             raise RuntimeError(
                 "like not confirmed: compose card still open after Send Like tap"
             )
