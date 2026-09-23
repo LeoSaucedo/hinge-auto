@@ -155,9 +155,14 @@ def judge(frames: list[bytes]) -> Decision:
     if response.status_code != 200:
         # 400s here are usually one of the thinking/tool_choice conflicts or a
         # context overrun — surface the API's own message rather than guessing.
-        raise RuntimeError(
+        err = RuntimeError(
             f"DeepSeek API error {response.status_code}: {response.text[:500]}"
         )
+        # Attach the status so the harness can tell a fatal error (bad key,
+        # empty balance) from a retryable one without parsing the text.
+        # See judge_common.is_fatal_judge_error.
+        err.status_code = response.status_code
+        raise err
     payload = response.json()
     usage = _usage_from(payload)
 
