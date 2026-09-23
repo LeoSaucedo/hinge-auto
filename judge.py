@@ -6,8 +6,10 @@ live in `judge_common.py` so the Ollama backend stays in sync.
 """
 
 import base64
+import os
 
 import anthropic
+from dotenv import load_dotenv
 
 import config
 from judge_common import (
@@ -38,6 +40,13 @@ def _image_block(png_bytes: bytes) -> dict:
 
 def judge(frames: list[bytes]) -> Decision:
     """Given an ordered list of PNG frames of one profile, return a Decision."""
+    load_dotenv()
+    # Fail with the same plain message judge_deepseek.py raises, rather than
+    # letting the SDK surface its own constructor error mid-run. config.py
+    # still defaults to this backend, so switching back without the key in
+    # .env is an easy mistake to make.
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise RuntimeError("ANTHROPIC_API_KEY not set. Add it to .env or export it.")
     client = anthropic.Anthropic()
 
     content = [_image_block(f) for f in frames]
