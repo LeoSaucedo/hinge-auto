@@ -99,20 +99,23 @@ FRAMES_PER_PROFILE = 7
 # Calibrated for Moto e20 (720x1600) on 2026-06-28.
 # Run `python calibrate.py` to verify/adjust after any Hinge UI update.
 COORDS = {
-    # Skip / like action targets (Discover screen, photo 1 at top)
+    # The only fixed tap target left. Skip is a small X in a stable spot;
+    # everything else do_like taps is located at tap-time by template
+    # matching instead.
     "skip_button":       (89, 1319),   # X icon
-    "heart_photo_1":     (624, 897),   # Heart icon (white heart on black bg, July 2026)
 
-    # Compose box (anchors to the element whose heart was tapped; these
-    # values are mostly fallbacks — vision.py re-finds them at tap-time
-    # because the box shifts per profile).
+    # Don't add heart / compose-box / close-button coordinates here. This
+    # table used to carry heart_photo_1, send_like_button and comment_input;
+    # by the end nothing read any of the three, and a coordinate table that
+    # looks authoritative but isn't is how a stale-tap bug gets written.
+    # vision.py finds both the heart and the Send Like button by template
+    # matching, because the compose card shifts per profile — so an entry
+    # here would only ever be a fixed point waiting to go out of date.
     #
-    # There is deliberately no close-button coordinate here. The compose
-    # overlay has no close control of its own: the only X on screen is
-    # skip_button, which floats above the card and dismisses it by advancing
-    # the feed. do_like's failure path relies on that via do_skip().
-    "send_like_button":  (463, 872),
-    "comment_input":     (333, 753),
+    # A close button is impossible to add anyway: the compose overlay has no
+    # close control of its own. The only X on screen is skip_button, which
+    # floats above the card and dismisses it by advancing the feed. do_like's
+    # failure path relies on that via do_skip().
 
     # Scroll gesture (swipe up = scroll down through profile). Only the y
     # values are read: the live x is re-randomized per gesture within a
