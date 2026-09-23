@@ -11,10 +11,23 @@ from pathlib import Path
 from urllib import request as urllib_request
 
 import config
+import metrics
 
 
 _USER_AGENT = "HingeAuto/1.0"
 _DISCORD_ATTACHMENT_LIMIT = 10
+
+
+def _footer(total_cost: float, total_duration_s: float,
+            avg_fit_score: float) -> dict:
+    """Embed footer: cost, duration, average fit, and the judge model — so a
+    run's backend is identifiable from Discord when comparing backends."""
+    return {
+        "text": (
+            f"${total_cost:.2f} · {total_duration_s:.0f}s · "
+            f"avg fit {avg_fit_score:.0f}/100 · {metrics.active_model()}"
+        )
+    }
 
 
 def _send_multipart_payload(webhook_url: str, payload: dict,
@@ -163,7 +176,7 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
                 {"name": "❤️ Likes", "value": str(likes_sent),    "inline": True},
                 {"name": "⏭️ Skip",  "value": str(skips),         "inline": True},
             ],
-            "footer": {"text": f"${total_cost:.2f} · {total_duration_s:.0f}s · avg fit {avg_fit_score:.0f}/100"},
+            "footer": _footer(total_cost, total_duration_s, avg_fit_score),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
         }
         _send_embed_only(webhook_url, embed)
@@ -197,7 +210,7 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
                     {"name": "⏭️ Skip",  "value": str(skips),         "inline": True},
                     {"name": "Liked", "value": profile_lines, "inline": False},
                 ],
-                "footer": {"text": f"${total_cost:.2f} · {total_duration_s:.0f}s · avg fit {avg_fit_score:.0f}/100"},
+                "footer": _footer(total_cost, total_duration_s, avg_fit_score),
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
             }
         else:
@@ -207,7 +220,7 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
                 "fields": [
                     {"name": "Liked", "value": profile_lines, "inline": False},
                 ],
-                "footer": {"text": f"${total_cost:.2f} · {total_duration_s:.0f}s · avg fit {avg_fit_score:.0f}/100"},
+                "footer": _footer(total_cost, total_duration_s, avg_fit_score),
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
             }
 

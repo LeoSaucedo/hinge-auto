@@ -96,6 +96,11 @@ if _PRICING is None:
     _PRICING = {"input_tokens": 0.0, "output_tokens": 0.0}
 
 
+def active_model() -> str:
+    """Model name for the active backend (same string logged per profile)."""
+    return _ACTIVE_MODEL
+
+
 def estimated_cost(usage: dict[str, int]) -> float:
     """Dollar estimate from a usage dict returned by judge()."""
     if not usage:
