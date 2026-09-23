@@ -206,7 +206,7 @@ def do_like(message: str = "") -> None:
     # Dismiss keyboard first in case Hinge auto-focused the comment field
     # and the keyboard is covering Send Like.
     adb.dismiss_keyboard_if_visible()
-    send_xy = vision.find_send_like(adb.screenshot())
+    send_xy = vision.find_send_like(adb.screenshot(), log_miss=True)
     if send_xy is None:
         save_error_screenshot("send-like-not-found")
         raise RuntimeError("vision: couldn't find Send Like after heart tap")
