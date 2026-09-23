@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
+
 import config
 
 
@@ -477,6 +479,45 @@ def is_fatal_judge_error(exc: BaseException) -> bool:
         if any(phrase in lowered for phrase in _FATAL_PHRASES):
             return True
 
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+# httpx is the transport under every backend — the Anthropic and OpenAI SDKs
+# both sit on it, google-genai does too, and judge_deepseek.py calls it
+# directly — so a transport-level failure surfaces as the same family of
+# exceptions whichever judge is configured.
+#
+# The names cover errors an SDK wrapper raises instead of passing the httpx
+# one through: Anthropic's APIConnectionError subclasses APIError, not
+# httpx.TransportError, so isinstance alone would miss it. gaierror is DNS
+# failure, the usual shape of "the internet cut out" underneath httpx's
+# own wrapping.
+_NETWORK_ERROR_NAMES = frozenset({
+    "ConnectError", "ConnectTimeout", "ReadError", "ReadTimeout",
+    "WriteError", "WriteTimeout", "PoolTimeout", "RemoteProtocolError",
+    "APIConnectionError", "APITimeoutError", "gaierror",
+})
+
+
+def is_network_error(exc: BaseException) -> bool:
+    """True if `exc` means the request never reached the model.
+
+    These are deliberately absent from FATAL_STATUS_CODES: a dropped packet
+    is retryable in principle, so one shouldn't abort a run. But when they
+    outlast every retry the network is down, and the caller has to end the
+    run — force-skipping would spend real Hinge profiles on people the judge
+    never scored. Walks the exception chain the way is_fatal_judge_error
+    does, so wrapper layers don't hide the cause.
+    """
+    seen = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, httpx.TransportError):
+            return True
+        if _NETWORK_ERROR_NAMES & {c.__name__ for c in type(cur).__mro__}:
+            return True
         cur = cur.__cause__ or cur.__context__
     return False
 

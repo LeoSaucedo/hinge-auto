@@ -150,7 +150,11 @@ def judge(frames: list[bytes]) -> Decision:
         API_URL,
         json=body,
         headers={"Authorization": f"Bearer {api_key}"},
-        timeout=REQUEST_TIMEOUT_S,
+        # Everything keeps the full budget except connect: a slow model
+        # deserves REQUEST_TIMEOUT_S to think, but a connection that can't be
+        # established in 10s means the network is down. Without the split a
+        # cutout takes three minutes to announce itself, three times over.
+        timeout=httpx.Timeout(REQUEST_TIMEOUT_S, connect=10.0),
     )
     if response.status_code != 200:
         # 400s here are usually one of the thinking/tool_choice conflicts or a

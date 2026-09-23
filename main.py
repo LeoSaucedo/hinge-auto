@@ -23,7 +23,8 @@ import config
 import metrics
 import report
 import vision
-from judge_common import apply_fit_threshold, is_fatal_judge_error, load_backend
+from judge_common import (apply_fit_threshold, is_fatal_judge_error,
+                          is_network_error, load_backend)
 
 judge = load_backend().judge
 
@@ -487,6 +488,7 @@ def main() -> int:
         t1 = time.monotonic()
         decision = None
         fatal_error = None
+        network_error = None
         for attempt in range(3):
             try:
                 decision = judge(frames)
@@ -503,6 +505,13 @@ def main() -> int:
                 if is_fatal_judge_error(e):
                     fatal_error = err
                     break
+                # A network error is different in kind: it usually clears on
+                # its own, so it doesn't cut the attempts short. But if it
+                # outlasts all three, the internet is down — and skipping is
+                # the wrong recovery, because the judge never saw this
+                # profile and the skip would spend it for nothing.
+                if is_network_error(e):
+                    network_error = err
                 if attempt < 2:
                     time.sleep(5 * (attempt + 1))
         if fatal_error is not None:
@@ -511,6 +520,11 @@ def main() -> int:
             break
         t_judge = time.monotonic() - t1
         if decision is None:
+            if network_error is not None:
+                print(f"\nNETWORK ERROR on all 3 judge attempts — ending the "
+                      f"run. Nothing was skipped; the next cron slot resumes "
+                      f"from this profile.\n  {network_error}")
+                break
             print("Judge failed 3 times — skipping this profile to keep the loop alive.")
             do_skip()
             continue
