@@ -138,7 +138,7 @@ def log_profile(
         "message_archetype": decision.message_archetype,
         "premade_id": decision.premade_id,
         "prompt_referenced": decision.prompt_referenced,
-        "skip_reason": decision.skip_reason,
+        "dominant_factor": decision.dominant_factor,
         "timing": timing,
         "tokens": decision.usage,
         "estimated_cost_usd": round(estimated_cost(decision.usage), 5),

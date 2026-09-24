@@ -21,17 +21,13 @@ SYSTEM_PROMPT_TEMPLATE = """You are evaluating Hinge dating profiles on behalf o
 The user's preferences:
 {preferences}
 {age_clause}
-You will be shown a sequence of screenshots representing a single profile, in
-order from top to bottom. The profile may include photos, prompt responses
-(short text), and basic info (age, height, job, education, etc.).
+Each profile is photos, prompt responses, and basic info (age, height, job,
+education).
 {location_clause}
 {fit_clause}
-IMPORTANT: If any dialog, popup, overlay, or non-profile screen is present
-that covers any part of the profile and prevents you from analyzing it fully —
-including settings panels, subscription upsells, notification prompts, rate-the-app
-nags, or any other interruption — set decision="NOT_A_PROFILE". Use reasoning
-to describe what you're seeing (e.g. "a subscription upsell dialog is blocking
-the profile"). Only set decision="profile" when you can see the full profile.
+If a dialog, popup, overlay, or other non-profile screen blocks any part of
+the profile — settings panel, upsell, notification prompt, rating nag — set
+decision="NOT_A_PROFILE" and describe it in reasoning.
 
 {message_voice}
 {premades_section}
@@ -113,16 +109,40 @@ DECIDE_INPUT_SCHEMA = {
                 "ASCII, no emoji. See the message rubric in the system prompt."
             ),
         },
-        "skip_reason": {
+        "dominant_factor": {
             "type": "string",
-            "enum": ["none", "age", "preferences", "low_effort", "other"],
+            "enum": [
+                "none",
+                "other",
+                "age",
+                "reachability",
+                "looks",
+                "build",
+                "photos",
+                "height",
+                "religion",
+                "low_effort",
+                "grooming",
+                "tattoos",
+                "ethnicity",
+                "lifestyle",
+                "interests",
+                "humor",
+                "frame",
+                "style",
+            ],
             "description": (
-                "Categorical reason this profile is a poor fit, for "
-                "downstream analytics. \"age\" when the AGE GATE fired, "
-                "\"preferences\" when a specific PREFERENCES rule fired, "
+                "Which single factor from the PREFERENCES rubric most drove "
+                "this fit_score, for downstream analytics. Report it in BOTH "
+                "directions — a factor that pulled the score UP is as worth "
+                "recording as one that pulled it down; fit_score says which "
+                "way it cut. \"reachability\" when the reachability gate "
+                "drove the score, \"age\" when the AGE GATE fired, "
                 "\"low_effort\" when the profile was too thin to engage with "
-                "(no readable prompts, single photo, etc.). \"none\" when "
-                "nothing specific applies, \"other\" only if nothing else fits."
+                "(no readable prompts, single photo, etc.). Use \"none\" only "
+                "when no single factor dominated and the score came from the "
+                "overall read of the profile, and \"other\" only if nothing "
+                "above fits. Name the factor even when it argues for a like."
             ),
         },
         "message_archetype": {
@@ -170,7 +190,7 @@ DECIDE_INPUT_SCHEMA = {
     },
     "required": [
         "name", "decision", "fit_score", "confidence", "reasoning",
-        "message", "skip_reason", "message_archetype", "premade_id",
+        "message", "dominant_factor", "message_archetype", "premade_id",
         "prompt_referenced",
     ],
 }
@@ -185,7 +205,7 @@ class Decision:
     message: str = ""
     drafted_message: str = ""  # what the model wrote before the gate (kept for logs)
     fit_score: int = 0  # 0-100, authoritative for like/skip gating
-    skip_reason: str = "none"
+    dominant_factor: str = "none"
     message_archetype: str = "empty"
     premade_id: str = ""
     prompt_referenced: str = ""
@@ -209,7 +229,7 @@ def decision_from_tool_args(args: dict, usage: dict) -> Decision:
         "confidence": "low",
         "reasoning": "",
         "message": "",
-        "skip_reason": "other",
+        "dominant_factor": "other",
         "message_archetype": "empty",
         "premade_id": "",
         "prompt_referenced": "",
@@ -296,15 +316,13 @@ def _premades_section(premades: list[dict]) -> str:
 
 def _fit_clause() -> str:
     return (
-        f"\nFIT SCORE: assign a single integer fit_score (0-100) for how well "
-        f"this profile matches the user's preferences. Use the full range — don't "
-        f"cluster around the middle. 90+ = exact match, 75-89 = strong fit, "
-        f"60-74 = decent, 40-59 = neutral, 0-39 = not a fit. Only set "
-        f"decision=\"profile\" (or \"NOT_A_PROFILE\" for an overlay). You do NOT "
-        f"choose like vs skip — the run's harness decides that from your "
-        f"fit_score. Always draft an opener (see the message rubric). Base the "
-        f"score on preferences, profile info, prompt answers, and photos. When "
-        f"genuinely ambiguous, lean toward a lower score.\n"
+        f"\nFIT SCORE: one integer fit_score (0-100) for how well this profile "
+        f"matches the user's preferences. Use the full range — don't cluster "
+        f"around the middle. 90+ = exact match, 75-89 = strong fit, 60-74 = "
+        f"decent, 40-59 = neutral, 0-39 = not a fit. You do NOT choose like vs "
+        f"skip — the harness decides that from fit_score. Always draft an "
+        f"opener (see the message rubric). When genuinely ambiguous, lean "
+        f"toward a lower score.\n"
     )
 
 
@@ -317,7 +335,7 @@ def _age_clause(age_min: int | None, age_max: int | None) -> str:
         f"\nAGE GATE: only score as a fit if the profile's stated age is between "
         f"{lo} and {hi} inclusive. Hinge shows age in basic-info "
         f"(\"NN\" next to height/location). If age is visible and out of "
-        f"range, set fit_score=0 and skip_reason=\"age\" so the harness skips "
+        f"range, set fit_score=0 and dominant_factor=\"age\" so the harness skips "
         f"it. If age genuinely isn't visible across any frame, proceed with "
         f"the normal rubric.\n"
     )
@@ -332,11 +350,9 @@ def _location_clause() -> str:
     This clause is the half that actually does the work.
     """
     return (
-        "\nLOCATION: ignore it. Hinge shows a hometown and a distance "
-        '("3 miles away") in the basic info — treat both as decoration, not '
-        "as evidence for or against the profile. Never let location, "
-        "hometown, neighborhood, or proximity affect fit_score, and don't "
-        "mention them in your reasoning or in the opener you draft.\n"
+        "\nLOCATION: ignore it. Hometown and distance "
+        '("3 miles away") are decoration — never let them affect fit_score, '
+        "and don't mention them in your reasoning or the opener you draft.\n"
     )
 
 

@@ -129,16 +129,16 @@ SKIP signals (use sparingly):
      family", or similar long-horizon framing.
    - A single Long-term-relationship Dating Intention by itself is
      NOT a skip — many people select it by default.
-   Use skip_reason="other".
+   Use dominant_factor="other".
 
 2. Profile is bot-like / spam (single AI-looking photo, only an
    off-platform handle in the bio, photos contradict the stated info).
-   Use skip_reason="low_effort".
+   Use dominant_factor="low_effort".
 
 3. Profile is too thin to write an opener at all — no readable
    prompts, no specific photo details, just basic info. The premades
    work without a specific hook, so this rule should fire rarely.
-   Use skip_reason="low_effort".
+   Use dominant_factor="low_effort".
 
 Everything else is a LIKE. Career, hobbies, photo settings, vibe,
 group dynamics — none are skip signals. Don't get clever.

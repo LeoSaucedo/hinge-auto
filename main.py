@@ -292,7 +292,7 @@ def save_debug(frames: list[bytes], decision, profile_idx: int) -> str | None:
         f"drafted_message: {decision.drafted_message}\n"
         f"message_archetype: {decision.message_archetype}\n"
         f"prompt_referenced: {decision.prompt_referenced}\n"
-        f"skip_reason: {decision.skip_reason}\n"
+        f"dominant_factor: {decision.dominant_factor}\n"
         f"timestamp: {datetime.now().isoformat(timespec='seconds')}\n"
     )
     return folder.name
@@ -550,8 +550,12 @@ def main() -> int:
         # NOT_A_PROFILE is preserved by apply_fit_threshold for recovery below.
         decision = apply_fit_threshold(decision)
 
-        print(f"Decision: {decision.decision} ({decision.confidence}) "
-              f"[{decision.skip_reason if decision.decision == 'skip' else decision.message_archetype}]")
+        # dominant_factor is symmetric now — it names what drove the score in
+        # either direction, so a like shows it alongside the opener archetype.
+        label = decision.dominant_factor
+        if decision.decision == "like" and decision.message_archetype:
+            label = f"{decision.message_archetype} · {label}"
+        print(f"Decision: {decision.decision} ({decision.confidence}) [{label}]")
         print(f"Fit:      {decision.fit_score}/100 (threshold {config.FIT_SCORE_MIN})")
         print(f"Reason:   {decision.reasoning}")
         if decision.message:
