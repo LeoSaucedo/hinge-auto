@@ -68,6 +68,13 @@ MAX_LIKES_PER_SESSION = 8
 SESSION_LIKE_MIN = 0
 MAX_PROFILES_PER_SESSION = 100
 
+# ---------- Pickiness (fit score gate) ----------
+# The judge returns a fit_score (0-100) for every profile. The harness
+# decides LIKE iff fit_score >= FIT_SCORE_MIN, else SKIP. Raise this to be
+# pickier (fewer likes, higher average quality); lower it for more volume.
+# Env override: FIT_SCORE_MIN in .env.
+FIT_SCORE_MIN = 50
+
 # ---------- Device settings ----------
 # Moto e20 real phone is 720x1600. Change if using a different device.
 SCREEN_WIDTH = 720
@@ -92,16 +99,23 @@ FRAMES_PER_PROFILE = 7
 # Calibrated for Moto e20 (720x1600) on 2026-06-28.
 # Run `python calibrate.py` to verify/adjust after any Hinge UI update.
 COORDS = {
-    # Skip / like action targets (Discover screen, photo 1 at top)
+    # The only fixed tap target left. Skip is a small X in a stable spot;
+    # everything else do_like taps is located at tap-time by template
+    # matching instead.
     "skip_button":       (89, 1319),   # X icon
-    "heart_photo_1":     (624, 897),   # Heart icon (white heart on black bg, July 2026)
 
-    # Compose box (anchors to the element whose heart was tapped; these
-    # values are mostly fallbacks — vision.py re-finds them at tap-time
-    # because the box shifts per profile).
-    "send_like_button":  (463, 872),
-    "comment_input":     (333, 753),
-    "compose_close":     (650, 135),
+    # Don't add heart / compose-box / close-button coordinates here. This
+    # table used to carry heart_photo_1, send_like_button and comment_input;
+    # by the end nothing read any of the three, and a coordinate table that
+    # looks authoritative but isn't is how a stale-tap bug gets written.
+    # vision.py finds both the heart and the Send Like button by template
+    # matching, because the compose card shifts per profile — so an entry
+    # here would only ever be a fixed point waiting to go out of date.
+    #
+    # A close button is impossible to add anyway: the compose overlay has no
+    # close control of its own. The only X on screen is skip_button, which
+    # floats above the card and dismisses it by advancing the feed. do_like's
+    # failure path relies on that via do_skip().
 
     # Scroll gesture (swipe up = scroll down through profile). Only the y
     # values are read: the live x is re-randomized per gesture within a
@@ -143,7 +157,8 @@ DELAYS = {
 # "anthropic" -> uses your ANTHROPIC_API_KEY; best quality, ~$0.02-0.05/profile.
 # "ollama"    -> uses Ollama Cloud (free tier) or local Ollama; lower quality
 #                but no per-token cost.
-# "gemini"    -> uses Gemini via GEMINI_API_KEY; cheapest option.
+# "gemini"    -> uses Gemini via GEMINI_API_KEY; cheap, good quality.
+# "deepseek"  -> uses DeepSeek via DEEPSEEK_API_KEY; cheap vision backend.
 JUDGE_BACKEND = "anthropic"
 
 # ---------- Anthropic settings (when JUDGE_BACKEND == "anthropic") ----------
@@ -174,10 +189,29 @@ OLLAMA_HOST = None
 # Override via GEMINI_MODEL env var or edit the default below.
 GEMINI_MODEL = "gemini-3.1-flash-lite"
 
+# ---------- DeepSeek settings (when JUDGE_BACKEND == "deepseek") ----------
+# DEEPSEEK_API_KEY must be set in .env or environment. The API is
+# OpenAI-compatible (https://api.deepseek.com); see judge_deepseek.py.
+#
+# Models:
+#   "deepseek-flash"   — DeepSeek-V4.1-Flash; vision-capable (default)
+#   "deepseek-v4-pro"  — stronger, but NO vision — unusable for this repo
+# Override via DEEPSEEK_MODEL env var or edit the default below.
+DEEPSEEK_MODEL = "deepseek-flash"
+
+# Thinking mode. Off by default: it's the only way to force the
+# submit_decision tool call (the API rejects forced tool choice while
+# thinking is on — see judge_deepseek.py). Turn it on for better
+# reasoning on ambiguous profiles, at the cost of a prose-answer
+# fallback path and a slower, pricier call.
+DEEPSEEK_THINKING = False
+# Only used when DEEPSEEK_THINKING = True. low | medium | high | max
+# ("medium" is mapped to "high" by the API).
+DEEPSEEK_REASONING_EFFORT = "low"
+
 # ---------- Paths ----------
 BASE_DIR = Path(__file__).parent
 DEBUG_DIR = BASE_DIR / "debug"
-SCREENSHOTS_DIR = BASE_DIR / "screenshots"
 SAVE_DEBUG_FRAMES = True  # keep frames + decisions in debug/ for review
 
 

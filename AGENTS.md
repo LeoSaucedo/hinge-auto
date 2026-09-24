@@ -196,8 +196,10 @@ same, taps land correctly. If not, you'll see symptoms like:
 - A tap that should open a menu does nothing.
 - A tap that should advance a profile force-skips and lands on a
   different profile (i.e. it hit the wrong button entirely).
-- `vision.find_first_heart` returns coords noticeably different from
-  `COORDS["heart_photo_1"]`.
+- `vision.find_first_heart` returns a point that doesn't sit on the heart
+  in a screenshot you just captured. There is no `COORDS` entry for the
+  heart to compare against — vision.py locates it by template matching —
+  so the screenshot is the reference.
 
 When this happens, don't just shrug — you can fix it in-session.
 

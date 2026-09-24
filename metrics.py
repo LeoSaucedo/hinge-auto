@@ -52,6 +52,16 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
         "input_tokens":     0.30,
         "output_tokens":    1.00,
     },
+    # ---------- DeepSeek ----------
+    # deepseek-flash, peak rates. Peak windows are 01:00-04:00 and
+    # 06:00-10:00 UTC on weekdays; everything else (and all weekend) is
+    # off-peak at half these rates.
+    # Cached input is billed far cheaper ($0.003-0.006/1M), but it's
+    # reported inside input_tokens here, so estimates run slightly high.
+    "deepseek-flash": {
+        "input_tokens":     0.30,
+        "output_tokens":    1.20,
+    },
     # ---------- Ollama ----------
     "qwen2.5-vl": {
         "input_tokens":     0.0,   # free / local
@@ -71,6 +81,8 @@ def _resolve_model_name() -> str:
         return getattr(config, "MODEL", "claude-sonnet-4-6")
     if backend == "gemini":
         return getattr(config, "GEMINI_MODEL", "gemini-3.1-flash-lite")
+    if backend == "deepseek":
+        return getattr(config, "DEEPSEEK_MODEL", "deepseek-flash")
     if backend == "ollama":
         return getattr(config, "OLLAMA_MODEL", "qwen2.5-vl")
     return "unknown"
@@ -82,6 +94,11 @@ if _PRICING is None:
     print(f"[metrics] WARN: unknown model {_ACTIVE_MODEL!r}, cost will be $0 "
           f"— add pricing to metrics.py")
     _PRICING = {"input_tokens": 0.0, "output_tokens": 0.0}
+
+
+def active_model() -> str:
+    """Model name for the active backend (same string logged per profile)."""
+    return _ACTIVE_MODEL
 
 
 def estimated_cost(usage: dict[str, int]) -> float:
@@ -112,14 +129,17 @@ def log_profile(
         "model": _ACTIVE_MODEL,
         "name": decision.name,
         "decision": decision.decision,
+        "fit_score": decision.fit_score,
         "confidence": decision.confidence,
         "reasoning": decision.reasoning,
         "message": decision.message,
+        "drafted_message": decision.drafted_message,
+        "opener_anchor": decision.opener_anchor,
         "message_length": len(decision.message),
         "message_archetype": decision.message_archetype,
         "premade_id": decision.premade_id,
         "prompt_referenced": decision.prompt_referenced,
-        "skip_reason": decision.skip_reason,
+        "dominant_factor": decision.dominant_factor,
         "timing": timing,
         "tokens": decision.usage,
         "estimated_cost_usd": round(estimated_cost(decision.usage), 5),
@@ -135,6 +155,7 @@ def print_running_totals(
     skips: int,
     total_cost: float,
     total_seconds: float,
+    avg_fit_score: float = 0.0,
 ) -> None:
     """One-line summary printed every loop iteration."""
     avg_cost = total_cost / profiles_seen if profiles_seen else 0
@@ -144,6 +165,7 @@ def print_running_totals(
     print(
         f"[totals] {profiles_seen} profiles | {likes_sent} likes "
         f"({like_rate:.0%}) | {skips} skips | "
+        f"avg fit {avg_fit_score:.0f}/100 | "
         f"${total_cost:.3f} (~${avg_cost:.4f}/profile) | "
         f"avg {avg_time:.1f}s/profile | {model_tag}"
     )

@@ -8,12 +8,22 @@ import time
 import config
 
 
+# Every adb call gets a deadline. Without one, an `adb` that never returns —
+# adbd wedged, USB dropped mid-command — blocks the run forever: under cron
+# nothing supervises it, the process holds the device, and the next slot fires
+# on top of it. A timeout turns "hangs silently until someone notices" into an
+# ordinary failure. 30s is roughly 15x the slowest real call (exec-out
+# screencap at 720x1600), so a slow Pi won't trip it.
+ADB_TIMEOUT_S = 30.0
+
+
 def _run(args: list[str], capture: bool = False) -> bytes | None:
     cmd = ["adb"] + args
     if capture:
-        result = subprocess.run(cmd, capture_output=True, check=True)
+        result = subprocess.run(cmd, capture_output=True, check=True,
+                                timeout=ADB_TIMEOUT_S)
         return result.stdout
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, timeout=ADB_TIMEOUT_S)
     return None
 
 

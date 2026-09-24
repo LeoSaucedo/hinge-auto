@@ -11,10 +11,23 @@ from pathlib import Path
 from urllib import request as urllib_request
 
 import config
+import metrics
 
 
 _USER_AGENT = "HingeAuto/1.0"
 _DISCORD_ATTACHMENT_LIMIT = 10
+
+
+def _footer(total_cost: float, total_duration_s: float,
+            avg_fit_score: float) -> dict:
+    """Embed footer: cost, duration, average fit, and the judge model — so a
+    run's backend is identifiable from Discord when comparing backends."""
+    return {
+        "text": (
+            f"${total_cost:.2f} · {total_duration_s:.0f}s · "
+            f"avg fit {avg_fit_score:.0f}/100 · {metrics.active_model()}"
+        )
+    }
 
 
 def _send_multipart_payload(webhook_url: str, payload: dict,
@@ -118,7 +131,8 @@ def _send_embed_only(webhook_url: str, embed: dict) -> None:
 
 def post_run(likes_sent: int, profiles_seen: int, skips: int,
              total_cost: float, total_duration_s: float,
-             liked_profiles: list[dict] | None = None) -> None:
+             liked_profiles: list[dict] | None = None,
+             avg_fit_score: float = 0.0) -> None:
     """Post profile photos with stats in the first batch, no separate summary."""
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
     if not webhook_url:
@@ -146,7 +160,12 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
                         if candidate.is_file():
                             photo_bytes = candidate.read_bytes()
                             break
-        profile_data.append({"name": name, "msg": msg, "bytes": photo_bytes})
+        profile_data.append({
+            "name": name,
+            "msg": msg,
+            "fit_score": profile.get("fit_score", 0),
+            "bytes": photo_bytes,
+        })
 
     if not profile_data:
         embed = {
@@ -157,7 +176,7 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
                 {"name": "❤️ Likes", "value": str(likes_sent),    "inline": True},
                 {"name": "⏭️ Skip",  "value": str(skips),         "inline": True},
             ],
-            "footer": {"text": f"${total_cost:.2f} · {total_duration_s:.0f}s"},
+            "footer": _footer(total_cost, total_duration_s, avg_fit_score),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
         }
         _send_embed_only(webhook_url, embed)
@@ -176,7 +195,8 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
         start_num = batch_idx * _DISCORD_ATTACHMENT_LIMIT + 1
         end_num = start_num + len(batch) - 1
         profile_lines = "\n".join(
-            f"{start_num + i}. **{p['name']}** — {p['msg']}"
+            f"{start_num + i}. **{p['name']}** — {p['msg']} "
+            f"(fit {p.get('fit_score', 0)}/100)"
             for i, p in enumerate(batch)
         )
 
@@ -190,7 +210,7 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
                     {"name": "⏭️ Skip",  "value": str(skips),         "inline": True},
                     {"name": "Liked", "value": profile_lines, "inline": False},
                 ],
-                "footer": {"text": f"${total_cost:.2f} · {total_duration_s:.0f}s"},
+                "footer": _footer(total_cost, total_duration_s, avg_fit_score),
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
             }
         else:
@@ -200,7 +220,7 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
                 "fields": [
                     {"name": "Liked", "value": profile_lines, "inline": False},
                 ],
-                "footer": {"text": f"${total_cost:.2f} · {total_duration_s:.0f}s"},
+                "footer": _footer(total_cost, total_duration_s, avg_fit_score),
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
             }
 
