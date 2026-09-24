@@ -37,6 +37,7 @@ from judge_common import (
     build_system_prompt,
     decision_from_tool_args,
     enforce_premade_verbatim,
+    first_frame_label,
 )
 
 
@@ -81,10 +82,14 @@ def judge(frames: list[bytes]) -> Decision:
     client = _client()
     model = getattr(config, "OLLAMA_MODEL", "qwen2.5-vl")
 
+    # Ollama's chat API takes a flat `images` list with no text blocks at
+    # all, so the frame-0 note can only ride along in the user text here.
+    # The other backends send it as its own block after the images.
     user_text = (
         f"Above are {len(frames)} screenshots of one Hinge profile, in order "
         "from top to bottom. Score how well it fits, then call the "
         "submit_decision tool with the structured result."
+        + (f" {first_frame_label(len(frames))}" if len(frames) > 1 else "")
     )
 
     response = client.chat(

@@ -101,6 +101,20 @@ DECIDE_INPUT_SCHEMA = {
                 "an activity in a photo, the bio/info line)."
             ),
         },
+        "opener_anchor": {
+            "type": "string",
+            "description": (
+                "Answer this BEFORE writing `message`: name the one "
+                "specific, visible detail in screenshot 1 — the photo the "
+                "like goes out next to — that the opener will be about, "
+                "e.g. \"denim jacket\", \"the dog on the couch\". Describe "
+                "what you actually see in that photo. Do not name a detail "
+                "from a prompt answer or from a later screenshot. Empty "
+                "string only if screenshot 1 has no visible hook at all, "
+                "in which case the opener falls back to a playful "
+                "either/or per the message rubric."
+            ),
+        },
         "message": {
             "type": "string",
             "description": (
@@ -190,10 +204,25 @@ DECIDE_INPUT_SCHEMA = {
     },
     "required": [
         "name", "decision", "fit_score", "confidence", "reasoning",
-        "message", "dominant_factor", "message_archetype", "premade_id",
-        "prompt_referenced",
+        "opener_anchor", "message", "dominant_factor", "message_archetype",
+        "premade_id", "prompt_referenced",
     ],
 }
+
+
+def first_frame_label(n: int) -> str:
+    """Text appended after the screenshots in the model's input.
+
+    send_like() re-scrolls to the top of the profile before tapping the
+    heart, so the like always goes out next to the first photo and the
+    opener has to anchor there. Saying so in the user message, right before
+    the model starts emitting fields, beats saying it in the system prompt
+    thousands of tokens earlier.
+    """
+    return (
+        f"Screenshot 1 of {n}. The like goes out next to THIS photo, so the "
+        "opener must reference a detail visible in it."
+    )
 
 
 @dataclass
@@ -204,6 +233,7 @@ class Decision:
     reasoning: str
     message: str = ""
     drafted_message: str = ""  # what the model wrote before the gate (kept for logs)
+    opener_anchor: str = ""  # detail the model committed to before writing the message
     fit_score: int = 0  # 0-100, authoritative for like/skip gating
     dominant_factor: str = "none"
     message_archetype: str = "empty"
@@ -229,6 +259,7 @@ def decision_from_tool_args(args: dict, usage: dict) -> Decision:
         "confidence": "low",
         "reasoning": "",
         "message": "",
+        "opener_anchor": "",
         "dominant_factor": "other",
         "message_archetype": "empty",
         "premade_id": "",

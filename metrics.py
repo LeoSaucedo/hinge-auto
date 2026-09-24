@@ -134,6 +134,7 @@ def log_profile(
         "reasoning": decision.reasoning,
         "message": decision.message,
         "drafted_message": decision.drafted_message,
+        "opener_anchor": decision.opener_anchor,
         "message_length": len(decision.message),
         "message_archetype": decision.message_archetype,
         "premade_id": decision.premade_id,

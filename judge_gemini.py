@@ -19,6 +19,7 @@ from judge_common import (
     Decision,
     build_system_prompt,
     enforce_premade_verbatim,
+    first_frame_label,
 )
 
 
@@ -45,6 +46,11 @@ def judge(frames: list[bytes]) -> Decision:
     model = getattr(config, "GEMINI_MODEL", "gemini-3.1-flash-lite")
 
     parts = [_image_part(f) for f in frames]
+    # Name frame 0 in the text that follows the images, so it's still in
+    # recent context when the model picks an opener_anchor. Only worth
+    # saying when there's more than one frame to confuse it with.
+    if len(frames) > 1:
+        parts.append(types.Part(text=first_frame_label(len(frames))))
     parts.append(types.Part(
         text=(
             f"Above are {len(frames)} screenshots of one Hinge profile, in "

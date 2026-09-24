@@ -42,6 +42,7 @@ from judge_common import (
     build_system_prompt,
     decision_from_tool_args,
     enforce_premade_verbatim,
+    first_frame_label,
 )
 
 
@@ -78,6 +79,11 @@ def _image_block(png_bytes: bytes) -> dict:
 
 def _request_body(model: str, frames: list[bytes], thinking: bool) -> dict:
     content = [_image_block(f) for f in frames]
+    # Name frame 0 in the text that follows the images, so it's still in
+    # recent context when the model picks an opener_anchor. Only worth
+    # saying when there's more than one frame to confuse it with.
+    if len(frames) > 1:
+        content.append({"type": "text", "text": first_frame_label(len(frames))})
     content.append({
         "type": "text",
         "text": (

@@ -290,6 +290,7 @@ def save_debug(frames: list[bytes], decision, profile_idx: int) -> str | None:
         f"reasoning: {decision.reasoning}\n"
         f"message: {decision.message}\n"
         f"drafted_message: {decision.drafted_message}\n"
+        f"opener_anchor: {decision.opener_anchor}\n"
         f"message_archetype: {decision.message_archetype}\n"
         f"prompt_referenced: {decision.prompt_referenced}\n"
         f"dominant_factor: {decision.dominant_factor}\n"
