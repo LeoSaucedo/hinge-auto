@@ -10,9 +10,8 @@ locations.json
 # Calibration captures from interactive coord mapping
 _cal/
 
-# Debug + screenshots — match data, decisions, captured frames
+# Debug output — match data, decisions, captured frames
 debug/
-screenshots/
 
 # Captured screenshots and ad-hoc state files
 _state.png

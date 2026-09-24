@@ -52,12 +52,19 @@ def _png_to_array(png: bytes) -> np.ndarray:
 # find_send_like — OpenCV template matching
 # ============================================================
 
-def find_send_like(png: bytes) -> tuple[int, int] | None:
+def find_send_like(png: bytes, log_miss: bool = False) -> tuple[int, int] | None:
     """Locate the 'Send Like' button via OpenCV template matching.
 
     Searches the right half of the screen. Returns (x, y) center of the
     best match, or None if confidence is below threshold or the template
     file is missing.
+
+    A miss is the *healthy* result at three of the four call sites — the
+    stale-card check and both like-confirmation checks are asking "is a
+    card still on screen?", and "no" is what a working like looks like. So
+    the miss line is opt-in; do_like's own lookup, the one place a miss is
+    a genuine failure, passes log_miss=True. Printing it unconditionally
+    meant every profile logged a line that read like a fault.
     """
     _load_templates()
     if _sendlike_template is None:
@@ -83,7 +90,8 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
         print(f"  Send Like: template match at ({cx}, {cy}) conf={max_val:.3f}")
         return (cx, cy)
 
-    print(f"  Send Like: not found (conf={max_val:.3f} < {_SENDLIKE_CONFIDENCE})")
+    if log_miss:
+        print(f"  Send Like: not found (conf={max_val:.3f} < {_SENDLIKE_CONFIDENCE})")
     return None
 
 

@@ -42,6 +42,7 @@ from judge_common import (
     build_system_prompt,
     decision_from_tool_args,
     enforce_premade_verbatim,
+    first_frame_label,
 )
 
 
@@ -78,6 +79,11 @@ def _image_block(png_bytes: bytes) -> dict:
 
 def _request_body(model: str, frames: list[bytes], thinking: bool) -> dict:
     content = [_image_block(f) for f in frames]
+    # Name frame 0 in the text that follows the images, so it's still in
+    # recent context when the model picks an opener_anchor. Only worth
+    # saying when there's more than one frame to confuse it with.
+    if len(frames) > 1:
+        content.append({"type": "text", "text": first_frame_label(len(frames))})
     content.append({
         "type": "text",
         "text": (
@@ -150,7 +156,11 @@ def judge(frames: list[bytes]) -> Decision:
         API_URL,
         json=body,
         headers={"Authorization": f"Bearer {api_key}"},
-        timeout=REQUEST_TIMEOUT_S,
+        # Everything keeps the full budget except connect: a slow model
+        # deserves REQUEST_TIMEOUT_S to think, but a connection that can't be
+        # established in 10s means the network is down. Without the split a
+        # cutout takes three minutes to announce itself, three times over.
+        timeout=httpx.Timeout(REQUEST_TIMEOUT_S, connect=10.0),
     )
     if response.status_code != 200:
         # 400s here are usually one of the thinking/tool_choice conflicts or a

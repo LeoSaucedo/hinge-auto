@@ -47,7 +47,7 @@ LIKE only when at least one of these is clearly true:
    answers, real photos showing identifiable activities) AND nothing
    in it is a turn-off.
 
-Skip reasons (use skip_reason="other" unless one fits better):
+Skip reasons (use dominant_factor="other" unless one fits better):
 
 - No prompt answers, or only generic stock prompts ("two truths and a
   lie" with no actual answers, "looking for [...]" with no fill-in).

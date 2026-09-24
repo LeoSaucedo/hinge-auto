@@ -23,7 +23,8 @@ import config
 import metrics
 import report
 import vision
-from judge_common import apply_fit_threshold, is_fatal_judge_error, load_backend
+from judge_common import (apply_fit_threshold, is_fatal_judge_error,
+                          is_network_error, load_backend)
 
 judge = load_backend().judge
 
@@ -119,6 +120,18 @@ def do_skip() -> None:
     _feed_at_top = True
 
 
+class FeedAlreadyAdvanced(RuntimeError):
+    """do_like aborted *after* the feed moved on — this profile is spent.
+
+    Clearing a stale compose card means tapping skip, which is the same
+    gesture as skipping a profile. main's do_like handler treats any failure
+    as "recover by skipping this profile", so a plain RuntimeError here made
+    it tap skip a second time — spending the *next* profile too, one the
+    judge never saw. Raising a distinct type lets the handler tell "the feed
+    already moved" from "the like failed and nothing has moved yet".
+    """
+
+
 def _dismiss_compose_card_if_visible() -> None:
     """Check for a stale compose card from a previous failed like.
 
@@ -130,7 +143,9 @@ def _dismiss_compose_card_if_visible() -> None:
         print("⚠️  Stale compose card detected — tapping skip")
         save_error_screenshot("stale-compose-card")
         do_skip()
-        raise RuntimeError("compose card still open from previous profile")
+        raise FeedAlreadyAdvanced(
+            "stale compose card dismissed; profile already skipped"
+        )
 
 
 def do_like(message: str = "") -> None:
@@ -191,7 +206,7 @@ def do_like(message: str = "") -> None:
     # Dismiss keyboard first in case Hinge auto-focused the comment field
     # and the keyboard is covering Send Like.
     adb.dismiss_keyboard_if_visible()
-    send_xy = vision.find_send_like(adb.screenshot())
+    send_xy = vision.find_send_like(adb.screenshot(), log_miss=True)
     if send_xy is None:
         save_error_screenshot("send-like-not-found")
         raise RuntimeError("vision: couldn't find Send Like after heart tap")
@@ -275,9 +290,10 @@ def save_debug(frames: list[bytes], decision, profile_idx: int) -> str | None:
         f"reasoning: {decision.reasoning}\n"
         f"message: {decision.message}\n"
         f"drafted_message: {decision.drafted_message}\n"
+        f"opener_anchor: {decision.opener_anchor}\n"
         f"message_archetype: {decision.message_archetype}\n"
         f"prompt_referenced: {decision.prompt_referenced}\n"
-        f"skip_reason: {decision.skip_reason}\n"
+        f"dominant_factor: {decision.dominant_factor}\n"
         f"timestamp: {datetime.now().isoformat(timespec='seconds')}\n"
     )
     return folder.name
@@ -487,6 +503,7 @@ def main() -> int:
         t1 = time.monotonic()
         decision = None
         fatal_error = None
+        network_error = None
         for attempt in range(3):
             try:
                 decision = judge(frames)
@@ -503,6 +520,13 @@ def main() -> int:
                 if is_fatal_judge_error(e):
                     fatal_error = err
                     break
+                # A network error is different in kind: it usually clears on
+                # its own, so it doesn't cut the attempts short. But if it
+                # outlasts all three, the internet is down — and skipping is
+                # the wrong recovery, because the judge never saw this
+                # profile and the skip would spend it for nothing.
+                if is_network_error(e):
+                    network_error = err
                 if attempt < 2:
                     time.sleep(5 * (attempt + 1))
         if fatal_error is not None:
@@ -511,6 +535,11 @@ def main() -> int:
             break
         t_judge = time.monotonic() - t1
         if decision is None:
+            if network_error is not None:
+                print(f"\nNETWORK ERROR on all 3 judge attempts — ending the "
+                      f"run. Nothing was skipped; the next cron slot resumes "
+                      f"from this profile.\n  {network_error}")
+                break
             print("Judge failed 3 times — skipping this profile to keep the loop alive.")
             do_skip()
             continue
@@ -522,8 +551,12 @@ def main() -> int:
         # NOT_A_PROFILE is preserved by apply_fit_threshold for recovery below.
         decision = apply_fit_threshold(decision)
 
-        print(f"Decision: {decision.decision} ({decision.confidence}) "
-              f"[{decision.skip_reason if decision.decision == 'skip' else decision.message_archetype}]")
+        # dominant_factor is symmetric now — it names what drove the score in
+        # either direction, so a like shows it alongside the opener archetype.
+        label = decision.dominant_factor
+        if decision.decision == "like" and decision.message_archetype:
+            label = f"{decision.message_archetype} · {label}"
+        print(f"Decision: {decision.decision} ({decision.confidence}) [{label}]")
         print(f"Fit:      {decision.fit_score}/100 (threshold {config.FIT_SCORE_MIN})")
         print(f"Reason:   {decision.reasoning}")
         if decision.message:
@@ -588,6 +621,14 @@ def main() -> int:
                     # Don't break here — the profile still needs its log
                     # record + cost tally below (metrics.log_profile).
                     hit_like_cap = True
+            except FeedAlreadyAdvanced as e:
+                # _dismiss_compose_card_if_visible already tapped skip and
+                # saved its own screenshot, so this profile is gone. The
+                # handler below would tap skip again, spending the next
+                # profile as well — one no judge ever scored.
+                print(f"do_like aborted: {e} — feed already advanced, "
+                      f"not skipping again.")
+                skips += 1
             except Exception as e:
                 save_error_screenshot(f"do-like-failed-{profiles_seen}")
                 print(f"do_like failed: {e!r} — recovering by skipping this profile.")
