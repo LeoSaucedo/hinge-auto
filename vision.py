@@ -14,8 +14,8 @@ import numpy as np
 from PIL import Image
 
 
-# Scale factor: resolution-independent constants are defined for 1080px
-# (Pixel 10 reference width) and scaled at import time.
+# Scale factor: resolution-independent constants are written in the
+# reference resolution's pixels (config.REF_WIDTH) and scaled at import time.
 _S = config.SCALE_X
 
 # Template images (one-time load at module init)
@@ -185,14 +185,13 @@ def is_app_loading(png: bytes) -> bool:
     near-white (≥230), it's a loading screen. On a real profile,
     photos and text bring this below the threshold.
 
-    Measured on the shipped Moto e20 (720x1600) over 200 sampled
-    profiles: real profile = 0.44 median, 0.62 max at the capture
-    position. That margin is narrower than the Bumble sibling's
-    (profile ~0.17, splash ~0.98) because Hinge floats each photo
-    card on a white background rather than filling the screen with
-    it. Mid-scroll frames reach 0.94, so this test is only safe
-    because the guard runs before the first scroll — do not move the
-    call site later in capture_profile().
+    Measured at 720x1600 over 200 sampled profiles: real profile = 0.44
+    median, 0.62 max at the capture position. That margin is narrower
+    than the Bumble sibling's (profile ~0.17, splash ~0.98) because
+    Hinge floats each photo card on a white background rather than
+    filling the screen with it. Mid-scroll frames reach 0.94, so this
+    test is only safe because the guard runs before the first scroll —
+    do not move the call site later in capture_profile().
     """
     im = np.array(Image.open(io.BytesIO(png)).convert("L"))
     h, w = im.shape
@@ -202,14 +201,13 @@ def is_app_loading(png: bytes) -> bool:
     # phone changes.
     #
     # This read "if h < 1500 or w < 950" until 2026-09-24: bounds written
-    # for the 1080-wide reference resolution — the Pixel 10 this repo ran
-    # before the Moto e20 — and left unscaled when the device changed in
-    # 8d3a736. Every frame the e20 produces is 720 wide, so the gate
-    # returned False unconditionally and the white-ratio test below was
-    # unreachable: in the eight weeks this guard existed it never fired
-    # once, and the "loading screen" recovery branch in main.py was
-    # equally dead. Same fix as the Bumble sibling, which was ported with
-    # the config-derived form.
+    # for the 1080-wide reference resolution, and left unscaled when the
+    # screen changed to 720 wide in 8d3a736. Every frame captured was 720
+    # wide, so the gate returned False unconditionally and the white-ratio
+    # test below was unreachable: in the eight weeks this guard existed it
+    # never fired once, and the "loading screen" recovery branch in main.py
+    # was equally dead. Same fix as the Bumble sibling, which was ported
+    # with the config-derived form.
     if h < config.SCREEN_HEIGHT * 0.9 or w < config.SCREEN_WIDTH * 0.9:
         return False
 

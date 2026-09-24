@@ -62,8 +62,10 @@ works before moving to the next.
 
 ### Phase 2 — Emulator + Hinge
 
-1. The user needs an Android emulator running. Pixel 10 (1080×2424) is
-   the calibrated default; other devices will need recalibration.
+1. The user needs an Android emulator running. The shipped defaults are
+   calibrated for a 720×1600 screen; other resolutions need recalibration
+   in Phase 3, or their own values set via SCREEN_WIDTH / SCREEN_HEIGHT /
+   COORDS in .env.
 2. Install Hinge from the **Play Store** inside the emulator (use a
    system image with Google Play, e.g. API 34): sign into a throwaway
    Google account, search Hinge, install — same as on a physical phone.
@@ -189,9 +191,9 @@ Dry-run guidance by tier (see Hard Constraints):
 
 ## Self-correcting calibration drift
 
-The shipped `config.COORDS` are tuned for a Pixel 10 emulator at
-1080x2424 against a specific Hinge build. If the user's setup is the
-same, taps land correctly. If not, you'll see symptoms like:
+The shipped `config.COORDS` are tuned for a 720x1600 screen against a
+specific Hinge build. If the user's setup is the same, taps land
+correctly. If not, you'll see symptoms like:
 
 - A tap that should open a menu does nothing.
 - A tap that should advance a profile force-skips and lands on a

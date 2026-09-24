@@ -33,9 +33,14 @@ import config
 _OUTPUT_FILE = config.BASE_DIR / "matches_coords.json"
 _CAL_DIR = config.BASE_DIR
 
-# Heuristic defaults for a 1080x2424 Pixel-class emulator. The bottom nav
-# sits in the bottom ~150px strip; icons are roughly evenly spaced. These
-# are STARTING GUESSES — calibration writes the real value.
+# Heuristic starting guesses, written in 1080x2424 reference pixels
+# (config.REF_WIDTH/REF_HEIGHT). The bottom nav sits in the bottom ~150px
+# strip; icons are roughly evenly spaced. These are STARTING GUESSES —
+# calibration writes the real value.
+#
+# Unlike vision.py's offsets these are NOT multiplied by config.SCALE_X, so
+# on a smaller screen _GUESS_Y_BOTTOM_NAV lands below the bottom edge.
+# Flagged rather than changed here: that is a behaviour fix, not a docs one.
 _GUESS_X_BY_NAV_POSITION = {
     # 5-icon nav: Discover · Standouts · Likes-You · Matches · Profile
     1: 108, 2: 324, 3: 540, 4: 756, 5: 972,

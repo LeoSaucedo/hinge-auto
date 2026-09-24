@@ -4,14 +4,15 @@ PREFERENCES, AGE_MIN/MAX, and MESSAGE_VOICE come from the active mode (see
 `modes/`). Set ACTIVE_MODE here for the persistent default; override per-run
 via `python main.py --mode <name>`.
 
-The COORDS defaults below are calibrated for a Pixel 10 emulator
-(1080x2424). If that's what you're running and Hinge hasn't shifted
-its layout, they should work as-is. Otherwise run `python calibrate.py`
-and update the values that don't match your device.
+The COORDS defaults below are calibrated against Hinge's current layout on
+a 720x1600 screen. They will be wrong for a different resolution — run
+`python calibrate.py` for values that match your device, and put them in
+.env rather than editing this file.
 
 .env variables override every config.py value at import time.
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -76,19 +77,25 @@ MAX_PROFILES_PER_SESSION = 100
 FIT_SCORE_MIN = 50
 
 # ---------- Device settings ----------
-# Moto e20 real phone is 720x1600. Change if using a different device.
+# Shipped default is a 720x1600 screen. Override SCREEN_WIDTH/SCREEN_HEIGHT
+# in .env for a different device — every value in COORDS below is a raw pixel
+# on THIS screen, so a different size means recalibrating the whole table.
 SCREEN_WIDTH = 720
 SCREEN_HEIGHT = 1600
 
 # ---------- Scaling ----------
-# Reference device (Pixel 10 = 1080x2424). All pixel offsets in the codebase
-# are defined relative to this reference and scaled at runtime.
+# The reference resolution the fixed offsets in the codebase were authored
+# against. Those constants are written in reference pixels and multiplied by
+# SCALE_X at runtime.
+#
+# This is NOT the device — it is the ruler the offsets were drawn with.
+# Leave it at 1080x2424 unless you re-author those offsets, or every scaled
+# constant moves somewhere else.
 REF_WIDTH = 1080
 REF_HEIGHT = 2424
 
-# Auto-computed scale factors (available for import by other modules).
-SCALE_X = SCREEN_WIDTH / REF_WIDTH
-SCALE_Y = SCREEN_HEIGHT / REF_HEIGHT
+# SCALE_X / SCALE_Y are computed at the bottom of this file, after the .env
+# override pass — see the note there.
 
 # Number of scroll-and-screenshot passes per profile.
 # Longer profiles (6 photos + 3 prompts) need ~7 frames at the scroll step
@@ -96,8 +103,9 @@ SCALE_Y = SCREEN_HEIGHT / REF_HEIGHT
 FRAMES_PER_PROFILE = 7
 
 # ---------- Coordinates ----------
-# Calibrated for Moto e20 (720x1600) on 2026-06-28.
-# Run `python calibrate.py` to verify/adjust after any Hinge UI update.
+# Raw pixels on the screen size above. Keys are individually overridable from
+# .env as JSON — see .env.example. Run `python calibrate.py` to
+# verify/adjust after any Hinge UI update.
 COORDS = {
     # The only fixed tap target left. Skip is a small X in a stable spot;
     # everything else do_like taps is located at tap-time by template
@@ -225,6 +233,9 @@ def _apply_env_overrides() -> None:
     Add `KEY=VALUE` to .env and it'll override the matching config.py
     variable at import time. Supports str, int, float, bool, and Path types
     (Path values are resolved relative to BASE_DIR unless absolute).
+
+    Dict-valued config (COORDS, DELAYS) is written as a JSON object and is
+    merged over the defaults rather than replacing them.
     """
     g = globals()
     for key, val in os.environ.items():
@@ -247,11 +258,47 @@ def _apply_env_overrides() -> None:
             g[key] = Path(val).expanduser()
             if not g[key].is_absolute():
                 g[key] = BASE_DIR / g[key]
+        elif isinstance(current, dict):
+            # Same reasoning as Paths: without this branch a dict-valued key
+            # falls through to the bare-string assignment below, and
+            # `COORDS='{...}'` in .env replaces the whole coordinate table
+            # with the *text* of a JSON object. Every later
+            # `config.COORDS["skip_button"]` then raises
+            # `TypeError: string indices must be integers` on the first tap.
+            #
+            # Merged over the defaults, not replacing them: a .env that moves
+            # two buttons shouldn't have to restate the table, and a typo'd
+            # key name then adds an entry nobody reads instead of silently
+            # dropping every key it didn't mention.
+            try:
+                parsed = json.loads(val)
+            except json.JSONDecodeError:
+                print(f"[config] env {key}={val!r}: not valid JSON, skipped")
+                continue
+            if not isinstance(parsed, dict):
+                print(f"[config] env {key}={val!r}: expected a JSON object, skipped")
+                continue
+            merged = dict(current)
+            merged.update(parsed)
+            g[key] = merged
         else:
             g[key] = val
 
 
 _apply_env_overrides()
+
+# Computed here, not next to SCREEN_*/REF_* above, because both are
+# env-overridable and this pass is what applies the overrides. Up there the
+# factors would be frozen at the shipped defaults: a .env with a different
+# SCREEN_WIDTH would move the screen and leave SCALE_X describing the old
+# one, silently, with nothing to notice it by.
+#
+# Hand-setting SCALE_X in .env does nothing — it is overwritten here. It is
+# derived from SCREEN_WIDTH/REF_WIDTH, so set those instead. (vision.py's
+# import-time `_S = config.SCALE_X` is fine: config's module body, this line
+# included, finishes before vision's begins.)
+SCALE_X = SCREEN_WIDTH / REF_WIDTH
+SCALE_Y = SCREEN_HEIGHT / REF_HEIGHT
 
 
 def _apply_mode() -> None:

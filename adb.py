@@ -63,7 +63,7 @@ def input_text(text: str) -> None:
         _run(["shell", f"input text {quoted}"])
     except subprocess.CalledProcessError as e:
         # Some devices/IME implementations crash `input text` with a
-        # NullPointerException (Moto e20 / Gboard). When this happens
+        # NullPointerException. When this happens
         # the keyboard is in a stuck state — dismiss it so the rest
         # of the pipeline can recover.
         print(f"adb: input_text failed (device IME crash) — dismissing"

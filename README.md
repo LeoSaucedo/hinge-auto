@@ -212,7 +212,7 @@ improvements beyond the original:
 - **Gemini backend** — cheaper alternative to Claude with competitive quality
 - **Webhook batching** — Discord embeds split into 10-attachment batches to stay within rate limits
 - **Keyboard dismiss** — automatic keyboard handling via `dumpsys input_method` detection
-- **NPE recovery** — `input_text` crashes on certain devices (Moto e20 / Gboard) caught gracefully with keyboard dismiss
+- **NPE recovery** — `input_text` crashes on certain devices/IMEs caught gracefully with keyboard dismiss
 - **Cost tracking** — per-profile and per-session cost estimates in metrics and Discord reports
 - **Randomized cron** — 0-20min jitter per session for anti-detection
 - **Session caps** — configurable min/max likes per session with random roll
