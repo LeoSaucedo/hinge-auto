@@ -16,6 +16,10 @@ import metrics
 
 _USER_AGENT = "HingeAuto/1.0"
 _DISCORD_ATTACHMENT_LIMIT = 10
+# Discord caps an embed field *value* at 1024 chars, and the `Liked` field
+# carries every liked opener in a single value. Batch against a budget below
+# the real cap so a long run splits instead of losing the whole embed.
+_DISCORD_FIELD_LIMIT = 1000
 
 
 def _footer(total_cost: float, total_duration_s: float,
@@ -28,6 +32,46 @@ def _footer(total_cost: float, total_duration_s: float,
             f"avg fit {avg_fit_score:.0f}/100 · {metrics.active_model()}"
         )
     }
+
+
+def _liked_line(n: int, p: dict) -> str:
+    """One line of the `Liked` field, exactly as it will be rendered."""
+    return (f"{n}. **{p['name']}** — {p['msg']} "
+            f"(fit {p.get('fit_score', 0)}/100)")
+
+
+def _batch_by_size(profile_data: list[dict]) -> list[list[tuple[int, dict]]]:
+    """Split liked profiles into webhook-sized batches, numbered globally.
+
+    Two independent limits apply to one message: Discord takes at most 10
+    attachments, and the `Liked` field text rides along in the same embed
+    under its 1024-char per-field cap. Bounding only the attachment count
+    let a run with long openers overflow the field, and Discord rejects the
+    entire embed with `400 {"embeds": ["0"]}` — the stats and all ten photos
+    lost with it, while the run still exits 0.
+
+    Lines are measured as rendered so the boundary follows actual opener
+    length rather than a guessed profiles-per-batch number. Numbering is
+    assigned here, before splitting, so a boundary landing somewhere new
+    doesn't renumber the list.
+    """
+    batches: list[list[tuple[int, dict]]] = []
+    current: list[tuple[int, dict]] = []
+    used = 0
+    for n, p in enumerate(profile_data, start=1):
+        line_len = len(_liked_line(n, p))
+        separator = 1 if current else 0  # the newline joining the lines
+        if current and (
+            len(current) >= _DISCORD_ATTACHMENT_LIMIT
+            or used + separator + line_len > _DISCORD_FIELD_LIMIT
+        ):
+            batches.append(current)
+            current, used, separator = [], 0, 0
+        current.append((n, p))
+        used += separator + line_len
+    if current:
+        batches.append(current)
+    return batches
 
 
 def _send_multipart_payload(webhook_url: str, payload: dict,
@@ -183,22 +227,17 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
         return
 
     # Send profile photos in batches, stats in the first batch
-    batches = [
-        profile_data[i:i + _DISCORD_ATTACHMENT_LIMIT]
-        for i in range(0, len(profile_data), _DISCORD_ATTACHMENT_LIMIT)
-    ]
+    batches = _batch_by_size(profile_data)
 
     for batch_idx, batch in enumerate(batches):
-        files_batch = [(f"{p['name']}_frame_00.png", p["bytes"])
-                       for p in batch if p["bytes"]]
+        # Keep the profile number with each photo: files_batch drops entries
+        # with no bytes, so an index-derived number would drift past a gap.
+        photos = [(f"{p['name']}_frame_00.png", p["bytes"], n)
+                  for n, p in batch if p["bytes"]]
+        files_batch = [(fn, data) for fn, data, _ in photos]
 
-        start_num = batch_idx * _DISCORD_ATTACHMENT_LIMIT + 1
-        end_num = start_num + len(batch) - 1
-        profile_lines = "\n".join(
-            f"{start_num + i}. **{p['name']}** — {p['msg']} "
-            f"(fit {p.get('fit_score', 0)}/100)"
-            for i, p in enumerate(batch)
-        )
+        start_num, end_num = batch[0][0], batch[-1][0]
+        profile_lines = "\n".join(_liked_line(n, p) for n, p in batch)
 
         if batch_idx == 0:
             embed = {
@@ -227,8 +266,8 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
         payload = {"embeds": [embed]}
         if files_batch:
             payload["attachments"] = [
-                {"id": i, "filename": fn, "description": f"Photo {start_num + i}"}
-                for i, (fn, _) in enumerate(files_batch)
+                {"id": i, "filename": fn, "description": f"Photo {n}"}
+                for i, (fn, _, n) in enumerate(photos)
             ]
         _send_multipart_payload(webhook_url, payload, files_batch)
 
