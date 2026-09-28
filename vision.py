@@ -14,8 +14,8 @@ import numpy as np
 from PIL import Image
 
 
-# Scale factor: resolution-independent constants are defined for 1080px
-# (Pixel 10 reference width) and scaled at import time.
+# Scale factor: resolution-independent constants are written in the
+# reference resolution's pixels (config.REF_WIDTH) and scaled at import time.
 _S = config.SCALE_X
 
 # Template images (one-time load at module init)
@@ -52,12 +52,19 @@ def _png_to_array(png: bytes) -> np.ndarray:
 # find_send_like — OpenCV template matching
 # ============================================================
 
-def find_send_like(png: bytes) -> tuple[int, int] | None:
+def find_send_like(png: bytes, log_miss: bool = False) -> tuple[int, int] | None:
     """Locate the 'Send Like' button via OpenCV template matching.
 
     Searches the right half of the screen. Returns (x, y) center of the
     best match, or None if confidence is below threshold or the template
     file is missing.
+
+    A miss is the *healthy* result at three of the four call sites — the
+    stale-card check and both like-confirmation checks are asking "is a
+    card still on screen?", and "no" is what a working like looks like. So
+    the miss line is opt-in; do_like's own lookup, the one place a miss is
+    a genuine failure, passes log_miss=True. Printing it unconditionally
+    meant every profile logged a line that read like a fault.
     """
     _load_templates()
     if _sendlike_template is None:
@@ -83,7 +90,8 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
         print(f"  Send Like: template match at ({cx}, {cy}) conf={max_val:.3f}")
         return (cx, cy)
 
-    print(f"  Send Like: not found (conf={max_val:.3f} < {_SENDLIKE_CONFIDENCE})")
+    if log_miss:
+        print(f"  Send Like: not found (conf={max_val:.3f} < {_SENDLIKE_CONFIDENCE})")
     return None
 
 
@@ -175,11 +183,32 @@ def is_app_loading(png: bytes) -> bool:
     Uses a simple white-pixel ratio across the full content area
     (excluding status bar and nav bar). If >75% of pixels are
     near-white (≥230), it's a loading screen. On a real profile,
-    photos and text bring this well below 50%.
+    photos and text bring this below the threshold.
+
+    Measured at 720x1600 over 200 sampled profiles: real profile = 0.44
+    median, 0.62 max at the capture position. That margin is narrower
+    than the Bumble sibling's (profile ~0.17, splash ~0.98) because
+    Hinge floats each photo card on a white background rather than
+    filling the screen with it. Mid-scroll frames reach 0.94, so this
+    test is only safe because the guard runs before the first scroll —
+    do not move the call site later in capture_profile().
     """
     im = np.array(Image.open(io.BytesIO(png)).convert("L"))
     h, w = im.shape
-    if h < 1500 or w < 950:
+
+    # Full-screen sanity check — reject thumbnails and crops. Derived
+    # from config rather than hard-coded, so it tracks the device if the
+    # phone changes.
+    #
+    # This read "if h < 1500 or w < 950" until 2026-09-24: bounds written
+    # for the 1080-wide reference resolution, and left unscaled when the
+    # screen changed to 720 wide in 8d3a736. Every frame captured was 720
+    # wide, so the gate returned False unconditionally and the white-ratio
+    # test below was unreachable: in the eight weeks this guard existed it
+    # never fired once, and the "loading screen" recovery branch in main.py
+    # was equally dead. Same fix as the Bumble sibling, which was ported
+    # with the config-derived form.
+    if h < config.SCREEN_HEIGHT * 0.9 or w < config.SCREEN_WIDTH * 0.9:
         return False
 
     # Full content area: exclude status bar (~y=0-150) and nav bar

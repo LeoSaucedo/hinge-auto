@@ -1,13 +1,17 @@
 """Backend-agnostic pieces of the judging pipeline.
 
-Both `judge.py` (Anthropic) and `judge_ollama.py` (Ollama) import from
-here so the system prompt, decision shape, and tool schema stay in sync.
+Every backend module (`judge.py`, `judge_deepseek.py`, `judge_gemini.py`,
+`judge_ollama.py`) imports from here so the system prompt, decision shape,
+and tool schema stay in sync.
 
 A backend module needs to expose `judge(frames: list[bytes]) -> Decision`.
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
+
+import httpx
 
 import config
 
@@ -17,20 +21,13 @@ SYSTEM_PROMPT_TEMPLATE = """You are evaluating Hinge dating profiles on behalf o
 The user's preferences:
 {preferences}
 {age_clause}
-You will be shown a sequence of screenshots representing a single profile, in
-order from top to bottom. The profile may include photos, prompt responses
-(short text), and basic info (age, height, location, job, education, etc.).
-
-Decide LIKE or SKIP based on the user's preferences. Be reasonably selective —
-don't like profiles that clearly don't match, but don't be unreasonably picky
-either. When the profile is genuinely ambiguous, lean SKIP.
-
-IMPORTANT: If any dialog, popup, overlay, or non-profile screen is present
-that covers any part of the profile and prevents you from analyzing it fully —
-including settings panels, subscription upsells, notification prompts, rate-the-app
-nags, or any other interruption — set decision="NOT_A_PROFILE". Use reasoning
-to describe what you're seeing (e.g. "a subscription upsell dialog is blocking
-the profile"). Only return LIKE or SKIP when you can see the full profile.
+Each profile is photos, prompt responses, and basic info (age, height, job,
+education).
+{location_clause}
+{fit_clause}
+If a dialog, popup, overlay, or other non-profile screen blocks any part of
+the profile — settings panel, upsell, notification prompt, rating nag — set
+decision="NOT_A_PROFILE" and describe it in reasoning.
 
 {message_voice}
 {premades_section}
@@ -40,9 +37,11 @@ Submit your decision via the submit_decision tool."""
 # Generic, voice-neutral fallback used when the active mode does not set
 # MESSAGE_VOICE. Replace by writing a voice file under voice/<name>.py
 # and pointing your mode at it.
-DEFAULT_MESSAGE_VOICE = """## Message rubric (when decision == "like")
+DEFAULT_MESSAGE_VOICE = """## Message rubric
 
-Write a short opener that goes out with the like.
+Always write a short opener for this profile. The harness decides whether
+it's actually used — a high fit_score sends it with a like, a low one
+discards it. You don't decide; just draft a best-effort opener.
 
 Aim for: one specific reference to something visible in the profile (a
 prompt answer or a concrete photo detail), followed by a short question
@@ -51,10 +50,11 @@ about it. Keep it friendly and curious. Around 60-120 characters total.
 Constraints:
 - Plain ASCII only. No emoji, no smart quotes, no em-dashes.
 - Avoid the characters \\, ", $, ` — they break the typing layer.
-- Empty string when decision == "skip".
-- If you'd lean LIKE but cannot write a specific, non-generic opener,
-  output the empty string for `message` and set `message_archetype` to
-  "empty". A like with no message is acceptable.
+- Never leave `message` empty just because you think it'll be skipped —
+  always draft something usable as an opener.
+- Only if you genuinely cannot write a specific, non-generic opener, use
+  the empty string for `message` and set `message_archetype` to "empty".
+  A like with no message is still acceptable.
 
 This is the GENERIC fallback voice. Most users will want to override it
 by setting `MESSAGE_VOICE` in their mode file (or pointing it at a
@@ -79,13 +79,19 @@ DECIDE_INPUT_SCHEMA = {
         },
         "decision": {
             "type": "string",
-            "enum": ["like", "skip", "NOT_A_PROFILE"],
-            "description": "Whether to like or skip this profile, or NOT_A_PROFILE if the screenshots don't show a profile at all (dialog, popup, settings, etc.).",
+            "enum": ["profile", "NOT_A_PROFILE"],
+            "description": "'profile' when the screenshots show a real profile you can score. 'NOT_A_PROFILE' when a dialog, popup, overlay, or non-profile screen blocks full analysis (use reasoning to describe it). Do NOT choose like vs skip — the harness decides that from fit_score.",
+        },
+        "fit_score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "How well this profile fits the user's preferences, 0-100. Use the full range: 90+ = exact match, 75-89 = strong fit, 60-74 = decent, 40-59 = neutral, 0-39 = not a fit. This is the authoritative score the run uses to decide like vs skip.",
         },
         "confidence": {
             "type": "string",
             "enum": ["low", "medium", "high"],
-            "description": "How confident you are in the decision.",
+            "description": "How confident you are in the fit_score.",
         },
         "reasoning": {
             "type": "string",
@@ -95,26 +101,62 @@ DECIDE_INPUT_SCHEMA = {
                 "an activity in a photo, the bio/info line)."
             ),
         },
+        "opener_anchor": {
+            "type": "string",
+            "description": (
+                "Answer this BEFORE writing `message`: name the one "
+                "specific, visible detail in screenshot 1 — the photo the "
+                "like goes out next to — that the opener will be about, "
+                "e.g. \"denim jacket\", \"the dog on the couch\". Describe "
+                "what you actually see in that photo. Do not name a detail "
+                "from a prompt answer or from a later screenshot. Empty "
+                "string only if screenshot 1 has no visible hook at all, "
+                "in which case the opener falls back to a playful "
+                "either/or per the message rubric."
+            ),
+        },
         "message": {
             "type": "string",
             "description": (
-                "The opener to send with the like. Required when "
-                "decision == \"like\"; use empty string when skipping. "
-                "Max ~150 chars, plain ASCII, no emoji. See the message "
-                "rubric in the system prompt."
+                "A short opener for this profile — always write one; the "
+                "harness sends it only with a like. Max ~150 chars, plain "
+                "ASCII, no emoji. See the message rubric in the system prompt."
             ),
         },
-        "skip_reason": {
+        "dominant_factor": {
             "type": "string",
-            "enum": ["none", "age", "preferences", "low_effort", "other"],
+            "enum": [
+                "none",
+                "other",
+                "age",
+                "reachability",
+                "looks",
+                "build",
+                "photos",
+                "height",
+                "religion",
+                "low_effort",
+                "grooming",
+                "tattoos",
+                "ethnicity",
+                "lifestyle",
+                "interests",
+                "humor",
+                "frame",
+                "style",
+            ],
             "description": (
-                "Categorical skip reason for downstream analytics. "
-                "Use \"none\" when decision == \"like\". "
-                "\"age\" when the AGE GATE clause triggered the skip. "
-                "\"preferences\" when a specific PREFERENCES rule fired. "
-                "\"low_effort\" when the profile was too thin to engage "
-                "with (no readable prompts, single photo, etc.). "
-                "\"other\" only if nothing else fits."
+                "Which single factor from the PREFERENCES rubric most drove "
+                "this fit_score, for downstream analytics. Report it in BOTH "
+                "directions — a factor that pulled the score UP is as worth "
+                "recording as one that pulled it down; fit_score says which "
+                "way it cut. \"reachability\" when the reachability gate "
+                "drove the score, \"age\" when the AGE GATE fired, "
+                "\"low_effort\" when the profile was too thin to engage with "
+                "(no readable prompts, single photo, etc.). Use \"none\" only "
+                "when no single factor dominated and the score came from the "
+                "overall read of the profile, and \"other\" only if nothing "
+                "above fits. Name the factor even when it argues for a like."
             ),
         },
         "message_archetype": {
@@ -161,25 +203,78 @@ DECIDE_INPUT_SCHEMA = {
         },
     },
     "required": [
-        "name", "decision", "confidence", "reasoning", "message",
-        "skip_reason", "message_archetype", "premade_id",
-        "prompt_referenced",
+        "name", "decision", "fit_score", "confidence", "reasoning",
+        "opener_anchor", "message", "dominant_factor", "message_archetype",
+        "premade_id", "prompt_referenced",
     ],
 }
+
+
+def first_frame_label(n: int) -> str:
+    """Text appended after the screenshots in the model's input.
+
+    send_like() re-scrolls to the top of the profile before tapping the
+    heart, so the like always goes out next to the first photo and the
+    opener has to anchor there. Saying so in the user message, right before
+    the model starts emitting fields, beats saying it in the system prompt
+    thousands of tokens earlier.
+    """
+    return (
+        f"Screenshot 1 of {n}. The like goes out next to THIS photo, so the "
+        "opener must reference a detail visible in it."
+    )
 
 
 @dataclass
 class Decision:
     name: str
-    decision: str  # "like" | "skip"
+    decision: str  # model: "profile" | "NOT_A_PROFILE"; after gate: "like" | "skip" | "NOT_A_PROFILE"
     confidence: str  # "low" | "medium" | "high"
     reasoning: str
     message: str = ""
-    skip_reason: str = "none"
+    drafted_message: str = ""  # what the model wrote before the gate (kept for logs)
+    opener_anchor: str = ""  # detail the model committed to before writing the message
+    fit_score: int = 0  # 0-100, authoritative for like/skip gating
+    dominant_factor: str = "none"
     message_archetype: str = "empty"
     premade_id: str = ""
     prompt_referenced: str = ""
     usage: dict[str, Any] = field(default_factory=dict)
+
+
+def decision_from_tool_args(args: dict, usage: dict) -> Decision:
+    """Build a Decision from a tool-call argument dict, tolerating mild
+    schema drift (non-Anthropic backends miss keys more often than Claude).
+
+    Used by the OpenAI-compatible backends (Ollama, DeepSeek). Missing
+    fields fall back to safe defaults; enum-like fields are clamped to
+    allowed values so a stray value can't break the loop.
+    """
+    defaults = {
+        "name": "unknown",
+        # Missing/odd verdicts are treated as a scoreable profile — the
+        # fit-score gate downstream is what decides like vs skip.
+        "decision": "profile",
+        "fit_score": 0,
+        "confidence": "low",
+        "reasoning": "",
+        "message": "",
+        "opener_anchor": "",
+        "dominant_factor": "other",
+        "message_archetype": "empty",
+        "premade_id": "",
+        "prompt_referenced": "",
+    }
+    merged = {**defaults, **{k: v for k, v in args.items() if k in defaults}}
+    # Clamp the model's profile/NOT_A_PROFILE verdict — NOT_A_PROFILE must
+    # survive so main.py's dialog recovery still fires. Anything else
+    # (including a stray like/skip) is treated as a scoreable profile;
+    # like vs skip is decided downstream by apply_fit_threshold.
+    if merged["decision"] != "NOT_A_PROFILE":
+        merged["decision"] = "profile"
+    if merged["confidence"] not in ("low", "medium", "high"):
+        merged["confidence"] = "low"
+    return Decision(**merged, usage=usage)
 
 
 def resolve_voice(voice: str | None) -> str:
@@ -250,18 +345,45 @@ def _premades_section(premades: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _fit_clause() -> str:
+    return (
+        f"\nFIT SCORE: one integer fit_score (0-100) for how well this profile "
+        f"matches the user's preferences. Use the full range — don't cluster "
+        f"around the middle. 90+ = exact match, 75-89 = strong fit, 60-74 = "
+        f"decent, 40-59 = neutral, 0-39 = not a fit. You do NOT choose like vs "
+        f"skip — the harness decides that from fit_score. Always draft an "
+        f"opener (see the message rubric). When genuinely ambiguous, lean "
+        f"toward a lower score.\n"
+    )
+
+
 def _age_clause(age_min: int | None, age_max: int | None) -> str:
     if age_min is None and age_max is None:
         return ""
     lo = age_min if age_min is not None else 18
     hi = age_max if age_max is not None else 99
     return (
-        f"\nAGE GATE: only LIKE if the profile's stated age is between "
+        f"\nAGE GATE: only score as a fit if the profile's stated age is between "
         f"{lo} and {hi} inclusive. Hinge shows age in basic-info "
         f"(\"NN\" next to height/location). If age is visible and out of "
-        f"range, decision=skip, skip_reason=\"age\", message=\"\". If age "
-        f"genuinely isn't visible across any frame, proceed with the normal "
-        f"rubric.\n"
+        f"range, set fit_score=0 and dominant_factor=\"age\" so the harness skips "
+        f"it. If age genuinely isn't visible across any frame, proceed with "
+        f"the normal rubric.\n"
+    )
+
+
+def _location_clause() -> str:
+    """Tell the model to disregard location.
+
+    Dropping "location" from the profile-info list isn't enough on its own:
+    Hinge renders a hometown and a distance right in the basic info, so the
+    judge reads them off the screenshots whether or not we name the field.
+    This clause is the half that actually does the work.
+    """
+    return (
+        "\nLOCATION: ignore it. Hometown and distance "
+        '("3 miles away") are decoration — never let them affect fit_score, '
+        "and don't mention them in your reasoning or the opener you draft.\n"
     )
 
 
@@ -269,6 +391,8 @@ def build_system_prompt() -> str:
     return SYSTEM_PROMPT_TEMPLATE.format(
         preferences=config.PREFERENCES.strip(),
         age_clause=_age_clause(config.AGE_MIN, config.AGE_MAX),
+        location_clause=_location_clause(),
+        fit_clause=_fit_clause(),
         message_voice=resolve_voice(config.MESSAGE_VOICE).strip(),
         premades_section=_premades_section(config.PREMADES),
     )
@@ -292,6 +416,159 @@ def enforce_premade_verbatim(decision: Decision) -> None:
     decision.premade_id = ""
 
 
+def apply_fit_threshold(decision: Decision) -> Decision:
+    """Decide like/skip entirely from fit_score and the FIT_SCORE_MIN dial.
+
+    The model never chooses like vs skip — it only scores each profile and
+    always drafts an opener. This is the single place the run decides: like
+    iff fit_score >= config.FIT_SCORE_MIN. NOT_A_PROFILE is preserved so
+    dialog/popup recovery keeps working. Clamps fit_score to 0-100 and
+    mutates + returns `decision`.
+    """
+    if decision.decision == "NOT_A_PROFILE":
+        return decision
+    try:
+        score = max(0, min(100, int(decision.fit_score)))
+    except (TypeError, ValueError):
+        print(f"[judge] WARN: invalid fit_score={decision.fit_score!r}, defaulting to 0")
+        score = 0
+    decision.fit_score = score
+    decision.decision = "like" if score >= config.FIT_SCORE_MIN else "skip"
+    # Preserve the model's drafted opener before any discard so it can be
+    # logged for review even when the profile is gated to a skip.
+    decision.drafted_message = decision.message
+    if decision.decision == "skip":
+        # The model always drafts an opener; never ship it on a skip. The
+        # harness decides, so an opener on a sub-threshold profile is dropped.
+        decision.message = ""
+        decision.message_archetype = "empty"
+        decision.premade_id = ""
+    return decision
+
+
+# ── Fatal judge errors ────────────────────────────────────────────────
+# Errors that will NOT clear on a retry. Retrying them burns Hinge swipes
+# blind: a judge that fails all three attempts falls through to a
+# force-skip, so a dead API key or an empty balance silently skips every
+# profile in the feed until the daily quota is gone. (Seen once on
+# Anthropic when the credit balance hit zero mid-run — 124 profiles were
+# skipped before anyone noticed.)
+#
+# Classify by HTTP status where one exists; that's the only
+# backend-independent signal. Providers word the same failure differently
+# (Anthropic: "credit balance is too low", DeepSeek: "Insufficient
+# Balance"), so message text is a fallback, not the primary key.
+FATAL_STATUS_CODES = frozenset({
+    400,  # malformed request / unsupported parameter — a config bug, not a blip
+    401,  # bad or missing API key
+    402,  # payment required — DeepSeek's "Insufficient Balance"
+    403,  # key is valid but not permitted for this call
+    404,  # model not found
+    422,  # unprocessable request — also a request-shape bug
+})
+
+# Catches backends that only put the code in the text, e.g.
+# judge_deepseek.py's RuntimeError("DeepSeek API error 402: {...}").
+_STATUS_IN_TEXT = re.compile(r"(?:API|HTTP|status)\D{0,10}(\d{3})\b", re.IGNORECASE)
+
+# Last resort, for errors carrying neither a status attribute nor a
+# parseable one in the message.
+_FATAL_PHRASES = (
+    "credit balance is too low",
+    "insufficient balance",
+    "insufficient_quota",
+    "authentication_error",
+    "invalid_api_key",
+    "permission_error",
+    "invalid_request_error",
+    "model not found",
+    # Shared tail of the "<NAME>_API_KEY not set. Add it to .env or export
+    # it." guard in judge_gemini.py and judge_deepseek.py. A missing key
+    # never clears on retry, and without this the loop spends all three
+    # attempts failing before blindly skipping every profile in the feed.
+    "not set. add it to .env",
+)
+
+
+def _http_status(exc: BaseException) -> int | None:
+    """Best-effort HTTP status for an exception from any backend."""
+    for attr in ("status_code", "status", "http_status"):
+        val = getattr(exc, attr, None)
+        if isinstance(val, int):
+            return val
+    # requests/httpx style: HTTPStatusError carries .response.status_code
+    val = getattr(getattr(exc, "response", None), "status_code", None)
+    return val if isinstance(val, int) else None
+
+
+def is_fatal_judge_error(exc: BaseException) -> bool:
+    """True if `exc` won't clear on retry, so the run should halt.
+
+    Walks the exception chain, because backends and vendor SDKs wrap the
+    interesting error (`raise X from e`) and the status usually sits on an
+    inner link rather than the one the caller catches.
+    """
+    seen = set()
+    cur = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+
+        status = _http_status(cur)
+        if status is not None and status in FATAL_STATUS_CODES:
+            return True
+
+        text = str(cur)
+        for match in _STATUS_IN_TEXT.finditer(text):
+            if int(match.group(1)) in FATAL_STATUS_CODES:
+                return True
+
+        lowered = text.lower()
+        if any(phrase in lowered for phrase in _FATAL_PHRASES):
+            return True
+
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+# httpx is the transport under every backend — the Anthropic and OpenAI SDKs
+# both sit on it, google-genai does too, and judge_deepseek.py calls it
+# directly — so a transport-level failure surfaces as the same family of
+# exceptions whichever judge is configured.
+#
+# The names cover errors an SDK wrapper raises instead of passing the httpx
+# one through: Anthropic's APIConnectionError subclasses APIError, not
+# httpx.TransportError, so isinstance alone would miss it. gaierror is DNS
+# failure, the usual shape of "the internet cut out" underneath httpx's
+# own wrapping.
+_NETWORK_ERROR_NAMES = frozenset({
+    "ConnectError", "ConnectTimeout", "ReadError", "ReadTimeout",
+    "WriteError", "WriteTimeout", "PoolTimeout", "RemoteProtocolError",
+    "APIConnectionError", "APITimeoutError", "gaierror",
+})
+
+
+def is_network_error(exc: BaseException) -> bool:
+    """True if `exc` means the request never reached the model.
+
+    These are deliberately absent from FATAL_STATUS_CODES: a dropped packet
+    is retryable in principle, so one shouldn't abort a run. But when they
+    outlast every retry the network is down, and the caller has to end the
+    run — force-skipping would spend real Hinge profiles on people the judge
+    never scored. Walks the exception chain the way is_fatal_judge_error
+    does, so wrapper layers don't hide the cause.
+    """
+    seen = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, httpx.TransportError):
+            return True
+        if _NETWORK_ERROR_NAMES & {c.__name__ for c in type(cur).__mro__}:
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
 def load_backend():
     """Resolve config.JUDGE_BACKEND to a module exposing judge(frames)."""
     backend = getattr(config, "JUDGE_BACKEND", "anthropic").lower()
@@ -304,6 +581,10 @@ def load_backend():
     if backend == "gemini":
         import judge_gemini
         return judge_gemini
+    if backend == "deepseek":
+        import judge_deepseek
+        return judge_deepseek
     raise ValueError(
-        f"Unknown JUDGE_BACKEND={backend!r}. Use 'anthropic', 'ollama', or 'gemini'."
+        f"Unknown JUDGE_BACKEND={backend!r}. Use 'anthropic', 'deepseek', "
+        f"'gemini', or 'ollama'."
     )

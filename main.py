@@ -23,9 +23,17 @@ import config
 import metrics
 import report
 import vision
-from judge_common import load_backend
+from judge_common import (apply_fit_threshold, is_fatal_judge_error,
+                          is_network_error, load_backend)
 
 judge = load_backend().judge
+
+# Set once an action has advanced the feed to a fresh profile rendered at the
+# top of the screen — either a confirmed like (do_like) or a skip tap
+# (do_skip). The next capture_profile() can then skip its defensive
+# scroll-back, which would otherwise burn 3-8 swipes on a profile that is
+# already at the top. Consumed on read.
+_feed_at_top = False
 
 
 def _profile_region_hash(png: bytes) -> str:
@@ -41,6 +49,8 @@ def _profile_region_hash(png: bytes) -> str:
 
 def capture_profile() -> list[bytes]:
     """Scroll through the current profile, returning a list of PNG frames."""
+    global _feed_at_top
+
     # Check for stuck loading screen BEFORE any scrolls or interactions.
     # Saves ~3-8 wasted scroll-up swipes + avoids burning API credits
     # judging a loading screen as if it were a profile.
@@ -48,11 +58,22 @@ def capture_profile() -> list[bytes]:
     if vision.is_app_loading(initial):
         raise RuntimeError("app stuck on loading screen")
 
-    # Defensive: new profiles load at the top, so this is just guarding
-    # against the app being mid-scroll from a prior partial action. A
-    # handful of swipes is enough — full 18-swipe sweep isn't needed
-    # because we aren't recovering from a 7-frame scroll-down.
-    scroll_back_to_top(swipes=random.randint(3, 8))
+    if _feed_at_top:
+        # The last action (confirmed like or skip) advanced the feed to a
+        # fresh profile already rendered at the top — the scroll-back below
+        # would burn 3-8 swipes on nothing. Pause instead, so the new profile
+        # still gets the beat to render that the swipes used to provide (an
+        # unrendered feed reads as a stuck loading screen and force-restarts
+        # the app).
+        print("Feed already at top after last action — skipping scroll-back.")
+        time.sleep(1.5)
+        _feed_at_top = False
+    else:
+        # Defensive: new profiles load at the top, so this is just guarding
+        # against the app being mid-scroll from a prior partial action. A
+        # handful of swipes is enough — full 18-swipe sweep isn't needed
+        # because we aren't recovering from a 7-frame scroll-down.
+        scroll_back_to_top(swipes=random.randint(3, 8))
 
     frames = []
     frames.append(adb.screenshot())
@@ -88,9 +109,27 @@ def scroll_back_to_top(swipes: int | None = None) -> None:
 def do_skip() -> None:
     """Tap the X to advance to the next profile. Always taps (even in dry run);
     advancing is needed for the loop to see new profiles."""
+    global _feed_at_top
     x, y = config.COORDS["skip_button"]
     adb.tap(x, y)
     adb.jitter_sleep("after_skip")
+    # A skip advances the feed the same way a sent like does: the next profile
+    # renders already at the top. Flag it only after the tap returns — if
+    # adb.tap itself failed there's no new profile to be at the top of, and
+    # leaving the flag clear keeps the defensive scroll-back for that case.
+    _feed_at_top = True
+
+
+class FeedAlreadyAdvanced(RuntimeError):
+    """do_like aborted *after* the feed moved on — this profile is spent.
+
+    Clearing a stale compose card means tapping skip, which is the same
+    gesture as skipping a profile. main's do_like handler treats any failure
+    as "recover by skipping this profile", so a plain RuntimeError here made
+    it tap skip a second time — spending the *next* profile too, one the
+    judge never saw. Raising a distinct type lets the handler tell "the feed
+    already moved" from "the like failed and nothing has moved yet".
+    """
 
 
 def _dismiss_compose_card_if_visible() -> None:
@@ -104,12 +143,16 @@ def _dismiss_compose_card_if_visible() -> None:
         print("⚠️  Stale compose card detected — tapping skip")
         save_error_screenshot("stale-compose-card")
         do_skip()
-        raise RuntimeError("compose card still open from previous profile")
+        raise FeedAlreadyAdvanced(
+            "stale compose card dismissed; profile already skipped"
+        )
 
 
 def do_like(message: str = "") -> None:
     """Flow: scroll to top → tap heart → type message → dismiss keyboard → find + click Send Like.
     """
+    global _feed_at_top
+
     if config.DRY_RUN:
         do_skip()
         return
@@ -163,7 +206,7 @@ def do_like(message: str = "") -> None:
     # Dismiss keyboard first in case Hinge auto-focused the comment field
     # and the keyboard is covering Send Like.
     adb.dismiss_keyboard_if_visible()
-    send_xy = vision.find_send_like(adb.screenshot())
+    send_xy = vision.find_send_like(adb.screenshot(), log_miss=True)
     if send_xy is None:
         save_error_screenshot("send-like-not-found")
         raise RuntimeError("vision: couldn't find Send Like after heart tap")
@@ -175,6 +218,35 @@ def do_like(message: str = "") -> None:
     # next profile and block heart / Send Like detection.
     if adb.dismiss_keyboard_if_visible():
         print("Keyboard was still open after like — dismissed.")
+
+    # ── 8. Confirm the like actually went out ──
+    # A sent like dismisses the compose card and advances the feed; a like
+    # that didn't take leaves the card (and its Send Like button) on screen.
+    # Reuse find_send_like as the signal — measured on the saved debug
+    # corpus it scores 0.997 on open cards vs <=0.415 on live profiles, so
+    # the 0.85 threshold has a wide margin either side.
+    if vision.find_send_like(adb.screenshot()) is not None:
+        # One more beat before calling it: a card that's mid-dismiss can
+        # still register. Only the failure path pays this second look.
+        time.sleep(1.5)
+        if vision.find_send_like(adb.screenshot()) is not None:
+            save_error_screenshot("like-not-confirmed")
+            # Deliberately no attempt to close the card here. The compose
+            # overlay has no close control of its own — the only X on screen
+            # is skip_button, which floats above the card and dismisses it by
+            # advancing the feed. Raising hands off to main's handler, which
+            # calls do_skip() and does exactly that.
+            #
+            # (An earlier version tapped COORDS["compose_close"] = (650, 135)
+            # here. Measured against the saved debug corpus, that point is the
+            # "Dating Intent" filter chip on every card screenshot we have —
+            # it opened a second overlay instead of clearing the first.)
+            raise RuntimeError(
+                "like not confirmed: compose card still open after Send Like tap"
+            )
+
+    # Confirmed — the feed has advanced to a new profile at the top.
+    _feed_at_top = True
 
 
 def _recover_from_dialog() -> None:
@@ -213,12 +285,15 @@ def save_debug(frames: list[bytes], decision, profile_idx: int) -> str | None:
 
         f"name: {decision.name}\n"
         f"decision: {decision.decision}\n"
+        f"fit_score: {decision.fit_score}\n"
         f"confidence: {decision.confidence}\n"
         f"reasoning: {decision.reasoning}\n"
         f"message: {decision.message}\n"
+        f"drafted_message: {decision.drafted_message}\n"
+        f"opener_anchor: {decision.opener_anchor}\n"
         f"message_archetype: {decision.message_archetype}\n"
         f"prompt_referenced: {decision.prompt_referenced}\n"
-        f"skip_reason: {decision.skip_reason}\n"
+        f"dominant_factor: {decision.dominant_factor}\n"
         f"timestamp: {datetime.now().isoformat(timespec='seconds')}\n"
     )
     return folder.name
@@ -328,10 +403,13 @@ def main() -> int:
     profiles_seen = 0
     total_cost = 0.0
     total_seconds = 0.0
+    fit_score_sum = 0
+    fit_score_count = 0
     liked_profiles: list[dict] = []  # tracked for the webhook report
     last_frame0_hash: str | None = None
     duplicate_streak = 0
     dialog_streak = 0
+    hit_like_cap = False
 
     while profiles_seen < config.MAX_PROFILES_PER_SESSION:
         profiles_seen += 1
@@ -425,6 +503,7 @@ def main() -> int:
         t1 = time.monotonic()
         decision = None
         fatal_error = None
+        network_error = None
         for attempt in range(3):
             try:
                 decision = judge(frames)
@@ -435,17 +514,19 @@ def main() -> int:
                 # Halt on errors that won't recover with a retry — burning
                 # through Hinge swipes blind (force-skipping every profile
                 # without a real decision) eats the daily quota and looks
-                # robotic to Hinge. Saw this once when the Anthropic credit
-                # balance hit zero mid-run: 124 profiles got blindly skipped
-                # before we noticed.
-                if any(s in err for s in (
-                    "credit balance is too low",
-                    "authentication_error",
-                    "invalid_api_key",
-                    "permission_error",
-                )):
+                # robotic to Hinge. Classification keys off HTTP status and
+                # walks the exception chain, so it covers every backend
+                # instead of matching Anthropic's wording only.
+                if is_fatal_judge_error(e):
                     fatal_error = err
                     break
+                # A network error is different in kind: it usually clears on
+                # its own, so it doesn't cut the attempts short. But if it
+                # outlasts all three, the internet is down — and skipping is
+                # the wrong recovery, because the judge never saw this
+                # profile and the skip would spend it for nothing.
+                if is_network_error(e):
+                    network_error = err
                 if attempt < 2:
                     time.sleep(5 * (attempt + 1))
         if fatal_error is not None:
@@ -454,16 +535,34 @@ def main() -> int:
             break
         t_judge = time.monotonic() - t1
         if decision is None:
+            if network_error is not None:
+                print(f"\nNETWORK ERROR on all 3 judge attempts — ending the "
+                      f"run. Nothing was skipped; the next cron slot resumes "
+                      f"from this profile.\n  {network_error}")
+                break
             print("Judge failed 3 times — skipping this profile to keep the loop alive.")
             do_skip()
             continue
 
         print(f"Name:     {decision.name}")
-        print(f"Decision: {decision.decision} ({decision.confidence}) "
-              f"[{decision.skip_reason if decision.decision == 'skip' else decision.message_archetype}]")
+
+        # ── Pickiness gate: like iff fit_score >= FIT_SCORE_MIN ──
+        # The model's decision is advisory; the run's threshold is authoritative.
+        # NOT_A_PROFILE is preserved by apply_fit_threshold for recovery below.
+        decision = apply_fit_threshold(decision)
+
+        # dominant_factor is symmetric now — it names what drove the score in
+        # either direction, so a like shows it alongside the opener archetype.
+        label = decision.dominant_factor
+        if decision.decision == "like" and decision.message_archetype:
+            label = f"{decision.message_archetype} · {label}"
+        print(f"Decision: {decision.decision} ({decision.confidence}) [{label}]")
+        print(f"Fit:      {decision.fit_score}/100 (threshold {config.FIT_SCORE_MIN})")
         print(f"Reason:   {decision.reasoning}")
         if decision.message:
             print(f"Message:  {decision.message}")
+        if decision.drafted_message and decision.drafted_message != decision.message:
+            print(f"Drafted:  {decision.drafted_message}  (not sent)")
 
         # ── Dialog / popup detection & recovery ──
         if decision.decision == "NOT_A_PROFILE":
@@ -500,6 +599,9 @@ def main() -> int:
         else:
             dialog_streak = 0
 
+        fit_score_sum += decision.fit_score
+        fit_score_count += 1
+
         folder_name = save_debug(frames, decision, profiles_seen)
 
         t2 = time.monotonic()
@@ -509,13 +611,24 @@ def main() -> int:
                 liked_profiles.append({
                     "name": decision.name,
                     "message": decision.message,
+                    "fit_score": decision.fit_score,
                     "index": profiles_seen,
                     "folder": folder_name,
                 })
                 likes_sent += 1
                 if likes_sent >= session_like_cap:
                     print(f"Hit max likes cap ({session_like_cap}). Stopping.")
-                    break
+                    # Don't break here — the profile still needs its log
+                    # record + cost tally below (metrics.log_profile).
+                    hit_like_cap = True
+            except FeedAlreadyAdvanced as e:
+                # _dismiss_compose_card_if_visible already tapped skip and
+                # saved its own screenshot, so this profile is gone. The
+                # handler below would tap skip again, spending the next
+                # profile as well — one no judge ever scored.
+                print(f"do_like aborted: {e} — feed already advanced, "
+                      f"not skipping again.")
+                skips += 1
             except Exception as e:
                 save_error_screenshot(f"do-like-failed-{profiles_seen}")
                 print(f"do_like failed: {e!r} — recovering by skipping this profile.")
@@ -538,15 +651,22 @@ def main() -> int:
         metrics.log_profile(profiles_seen, decision, timing)
         total_cost += metrics.estimated_cost(decision.usage)
         total_seconds += timing["total_seconds"]
+        avg_fit = (fit_score_sum / fit_score_count) if fit_score_count else 0
         metrics.print_running_totals(
             profiles_seen, likes_sent, skips, total_cost, total_seconds,
+            avg_fit_score=avg_fit,
         )
 
-    print(f"\nDone. {likes_sent} likes sent across {profiles_seen} profiles.")
+        if hit_like_cap:
+            break
+
+    avg_fit = (fit_score_sum / fit_score_count) if fit_score_count else 0
+    print(f"\nDone. {likes_sent} likes sent across {profiles_seen} profiles "
+          f"(avg fit {avg_fit:.0f}/100).")
 
     # Post-run report to Discord webhook (if configured)
     report.post_run(likes_sent, profiles_seen, skips, total_cost, total_seconds,
-                    liked_profiles)
+                    liked_profiles, avg_fit_score=avg_fit)
 
     # Cleanup: force-stop Hinge so next run starts fresh regardless of app state,
     # then turn screen off.
