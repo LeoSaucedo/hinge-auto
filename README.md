@@ -188,7 +188,6 @@ ADB capture    →  frame stitching  →  LLM judge         →  action
 | **`metrics.py`** | Tracks per-profile cost (model-aware pricing), timing, and writes JSONL to `debug/session_log.jsonl`. |
 | **`report.py`** | Discord webhook reporting with batched attachments (10 per message) — stats embed + profile photos. |
 | **`config.py`** | All settings with `.env` override support via `_apply_env_overrides()`. |
-| **`filters.py` / `locations.py`** | Drive Hinge's in-app filter sheets (age, neighborhood). Optional — both need calibrated coord files. |
 | **`matches_scan.py`** | Scrapes the Matches tab via a separate Claude vision pass — for analytics, not for the swipe loop. |
 | **`scan_self.py`** | Captures your own profile and asks the judge for improvement suggestions. The one feature that doesn't violate Hinge ToS. |
 | **`run_random_window.sh`** | Cron wrapper with 0-20min random jitter for session randomization. |

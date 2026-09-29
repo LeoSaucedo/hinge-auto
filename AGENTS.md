@@ -100,11 +100,6 @@ wrong for the user's emulator.
    before/after, and have them sanity-check that the coords look like
    what they read off the screenshot.
 
-If the user wants to use `--set-filters`, `--location`, or
-`--rotate`, they also need to run `calibrate_filters.py` /
-`calibrate_matches.py` and hand-edit `location_coords.json` (no
-interactive helper exists for the location picker yet).
-
 ### Phase 4 — Write a mode
 
 1. Show the user `modes/example_lenient.py` and `modes/example_strict.py`
@@ -180,8 +175,6 @@ Dry-run guidance by tier (see Hard Constraints):
   from modes.
 - `adb.py` / `vision.py` — emulator I/O and per-profile UI element
   detection.
-- `filters.py` / `locations.py` — optional in-app filter automation;
-  need calibrated coord files.
 - `metrics.py` — JSONL session logging.
 - `matches_scan.py` — separate Matches-tab scraper for analytics;
   Anthropic-only.
@@ -263,12 +256,8 @@ When this happens, don't just shrug — you can fix it in-session.
 
 ### Things NOT to auto-patch
 
-- Anything that requires multiple drags (e.g. the Age slider thumb
-  anchors). Hand those off to `calibrate_filters.py`, which already
-  does the math.
-- Anything that needs the user to confirm a screen-state change
-  (e.g. the location picker flow). Walk the user through it; don't
-  guess.
+- Anything that requires multiple drags, or that needs the user to
+  confirm a screen-state change. Walk the user through it; don't guess.
 
 ## Things to push back on
 

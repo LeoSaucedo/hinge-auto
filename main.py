@@ -307,29 +307,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Override config.ACTIVE_MODE for this run (one-shot). "
              "Must match a file under modes/<name>.py.",
     )
-    p.add_argument(
-        "--set-filters",
-        action="store_true",
-        help="Before looping, drive the in-app age slider to match the "
-             "active mode's AGE_MIN/AGE_MAX. Requires filter_coords.json "
-             "(see calibrate_filters.py).",
-    )
-    p.add_argument(
-        "--location",
-        default=None,
-        help="Before looping, change Hinge's 'My neighborhood' to the "
-             "named city (resolved via locations.json). Orthogonal to "
-             "--mode. Requires location_coords.json + Hinge+/X for "
-             "out-of-area changes.",
-    )
-    p.add_argument(
-        "--rotate",
-        default=None,
-        help="Named rotation path from locations.json _rotations (e.g. "
-             "'atl'). When Hinge's 'You've seen everyone' screen appears, "
-             "advance to the next city in the rotation. Loops back to "
-             "start when exhausted.",
-    )
     return p.parse_args(argv)
 
 
@@ -363,33 +340,6 @@ def main() -> int:
     if session_like_cap == 0:
         print("Cap is 0 — skipping this session.")
         return 0
-
-    if args.set_filters:
-        if config.AGE_MIN is None and config.AGE_MAX is None:
-            print("--set-filters requested but active mode has no age range; "
-                  "skipping in-app filter step.")
-        else:
-            import filters
-            print(f"Setting in-app age filter to {config.AGE_MIN}-{config.AGE_MAX}...")
-            filters.set_age_range(config.AGE_MIN, config.AGE_MAX)
-
-    if args.location:
-        import locations
-        resolved = locations.resolve(args.location)
-        print(f"Setting location to '{args.location}' (search: '{resolved}')...")
-        locations.set_location(args.location)
-
-    rotation_list: list[str] | None = None
-    rotation_idx: int = 0
-    if args.rotate:
-        import locations
-        rotation_list = locations.get_rotation(args.rotate)
-        # If --location was also set, start the rotation at that location if
-        # it's in the list; otherwise prepend it (don't replace the rotation).
-        if args.location and args.location in rotation_list:
-            rotation_idx = rotation_list.index(args.location)
-        print(f"Rotation '{args.rotate}': {rotation_list} (starting at "
-              f"index {rotation_idx} = '{rotation_list[rotation_idx]}')")
 
     # Wake screen and launch Hinge
     adb.wake_screen()
@@ -448,26 +398,6 @@ def main() -> int:
             raise
         t_capture = time.monotonic() - t0
         print(f"Captured {len(frames)} frames")
-
-        # Out-of-candidates detection: if frame 0 shows the "You've seen
-        # everyone for now" screen, we're stuck. If --rotate is on, advance
-        # to the next city; otherwise just break since further iteration
-        # would just force-skip nothing.
-        if rotation_list is not None:
-            import locations
-            if locations.is_out_of_candidates(frames[0]):
-                rotation_idx = (rotation_idx + 1) % len(rotation_list)
-                next_city = rotation_list[rotation_idx]
-                print(f"OUT OF CANDIDATES — rotating to '{next_city}' "
-                      f"(index {rotation_idx}/{len(rotation_list) - 1}).")
-                try:
-                    locations.set_location(next_city)
-                except Exception as e:
-                    print(f"set_location failed: {e!r} — continuing in place.")
-                last_frame0_hash = None
-                duplicate_streak = 0
-                profiles_seen -= 1  # don't count the empty-state capture
-                continue
 
         # If frame 0 is identical to the previous profile's frame 0, Hinge
         # didn't advance after our last action — force-skip rather than
