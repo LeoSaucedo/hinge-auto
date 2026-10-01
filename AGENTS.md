@@ -137,8 +137,10 @@ prompt rewrites or photo reorder before the first swipe session.
 
 1. Leave `MAX_LIKES_PER_SESSION = 8` (default — matches free Hinge's
    daily cap) and `DRY_RUN = False` (default).
-2. Have the user start the loop: `python main.py` (with Hinge open
-   on the Discover tab). Watch the printed decisions live.
+2. Have the user start the loop: `python run.py` (with Hinge open
+   on the Discover tab). Watch the printed decisions live. `run.py` is a
+   thin wrapper over `main.py` that also reports failures raised before
+   the loop starts; `python main.py` works the same for a live session.
 3. Stop with Ctrl-C if anything looks wrong — a weird opener, a like
    that should've been a skip, etc.
 4. Review `debug/session_log.jsonl` together. Walk through the
@@ -162,6 +164,17 @@ Dry-run guidance by tier (see Hard Constraints):
 ## Architecture orientation (for when the user asks "where does X live")
 
 - `main.py` — loop runner; capture → judge → act.
+- `run.py` — cron entry point and outer crash net: imports `main` inside
+  a `try` so an import-time failure still reaches Discord, then passes
+  `main()`'s exit code through. `main()` returns 1 on abort, 0 on a
+  clean run, so `cron.log`'s `Done (exit N)` line distinguishes them.
+- `report.py` — Discord webhook posts. Error and crash posts @mention
+  the user ID in `DISCORD_MENTION_USER_ID`; the mention has to be in the
+  top-level `content`, since Discord ignores mentions rendered inside an
+  embed. With the channel set to "Only @mentions", routine posts stay
+  silent and failures ping — so a user asking "why didn't I get
+  notified?" usually has a channel-level notification setting to check,
+  not a bug here.
 - `judge_common.py` — backend-agnostic system prompt, tool schema,
   `Decision` dataclass, voice resolver.
 - `judge.py` — Anthropic backend.
