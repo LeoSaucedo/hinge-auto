@@ -4,10 +4,12 @@ Loop: capture profile frames -> ask Claude -> tap like or skip -> repeat.
 """
 
 import argparse
+import fcntl
 import hashlib
 import random
 import re
 import sys
+import tempfile
 import time
 import traceback
 from datetime import datetime
@@ -312,6 +314,37 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _acquire_run_lock(serial: str):
+    """Take the one-run-at-a-time lock on `serial`, or None if another run
+    already holds it.
+
+    hinge-auto and bumble-auto drive the same phone, and an overrun puts
+    both on it at once: the second one's launch_app() takes the foreground
+    while the first keeps tapping, judging and liking whatever feed is now
+    in front of it — which is how the two of them came to report the same
+    women on 2026-10-01.
+
+    flock rather than a look at what's on screen, so that nothing here has
+    to know another bot exists, let alone which package it uses: a new
+    automation joins the contention by running, without every existing bot
+    being edited. The kernel releases the lock when its holder dies —
+    SIGKILL and reboot included — so a wedged run can't lock out the next
+    slot.
+
+    Hold the returned handle for as long as the run lasts: closing it, or
+    letting it be collected, releases the lock. Process exit is the only
+    unlock, on purpose.
+    """
+    path = Path(tempfile.gettempdir()) / f"dating-bot-{serial}.lock"
+    handle = open(path, "w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
 def main() -> int:
     args = _parse_args()
     load_dotenv()
@@ -322,6 +355,16 @@ def main() -> int:
 
     serial = adb.check_device()
     print(f"Connected to: {serial}")
+
+    # Held (never closed) for the rest of the process; see the docstring.
+    run_lock = _acquire_run_lock(serial)
+    if run_lock is None:
+        msg = (f"Another run already has the phone ({serial}) — cancelling "
+               f"this one without touching it. The next cron slot picks it "
+               f"up.")
+        print(f"\n{msg}")
+        report.post_error(msg, title="🔒 Hinge Auto — Run Skipped (phone busy)")
+        return 1
     age_band = (
         f"age {config.AGE_MIN}-{config.AGE_MAX}"
         if (config.AGE_MIN is not None or config.AGE_MAX is not None)
@@ -369,43 +412,10 @@ def main() -> int:
     # "Run Complete".
     abort_reason: str | None = None
     abort_screenshot: str | None = None
-    # Set when the run ends because the sibling bot has the phone. The
-    # cleanup below has to leave the device alone in that case.
-    sibling_has_phone = False
 
     while profiles_seen < config.MAX_PROFILES_PER_SESSION:
         profiles_seen += 1
         print(f"\n--- Profile {profiles_seen} ---")
-
-        # Shared-device guard. Both bots drive this one phone, and their cron
-        # slots are close enough (hinge odd hours, bumble even) that an
-        # overrun puts them on it at the same time — the sibling's
-        # launch_app() takes the foreground while this one keeps tapping.
-        # Everything below reads whatever is on screen, so a profile judged
-        # now would be the sibling's feed, and the like would be spent there.
-        # On 2026-10-01 that is exactly how both bots ended up reporting the
-        # same women.
-        #
-        # Only an exact match on the sibling package ends the run. None (no
-        # focused activity, or a dump that didn't parse) and any other package
-        # both fall through: aborting on "couldn't tell" would trade a rare
-        # wrong-feed tap for routinely losing slots, and the sibling merely
-        # sitting in the background is normal — what matters is who is in
-        # front. Checked here, at the top of the loop, so the answer is about
-        # the live screen rather than the launch that started the run.
-        sibling = getattr(config, "SIBLING_PACKAGE", "")
-        if sibling:
-            foreground = adb.foreground_package()
-            if foreground == sibling:
-                msg = (f"{sibling} is in the foreground — the sibling bot's "
-                       f"run has the phone. Ending this run rather than "
-                       f"judging its feed.")
-                print(f"\n{msg}")
-                abort_reason = msg
-                abort_screenshot = save_error_screenshot(
-                    "sibling-app-foreground")
-                sibling_has_phone = True
-                break
 
         t0 = time.monotonic()
         try:
@@ -680,13 +690,7 @@ def main() -> int:
     # Cleanup: force-stop Hinge so next run starts fresh regardless of app state,
     # then turn screen off.
     adb.force_stop_app("co.hinge.app")
-    if sibling_has_phone:
-        # This run ended because the sibling bot was mid-run on the shared
-        # phone. Turning the screen off now would hand it black screenshots
-        # for the rest of its slot — the opposite of the point of stopping.
-        print("Leaving the screen on — the sibling bot is still running.")
-    else:
-        adb.turn_screen_off()
+    adb.turn_screen_off()
 
     # An aborted run is not a success. This used to return 0 either way, so
     # cron.log read "Done (exit 0)" for a run that died halfway — the exit
