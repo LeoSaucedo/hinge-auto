@@ -39,6 +39,7 @@ import config
 from judge_common import (
     DECIDE_INPUT_SCHEMA,
     Decision,
+    JudgeUnavailableError,
     build_system_prompt,
     decision_from_tool_args,
     enforce_premade_verbatim,
@@ -178,7 +179,25 @@ def judge(frames: list[bytes]) -> Decision:
 
     choices = payload.get("choices") or []
     if not choices:
-        raise RuntimeError(f"DeepSeek ({model}) returned no choices: {payload}")
+        # No choices means no decision came back, which is a "couldn't serve
+        # this" however it's worded. Under queue pressure DeepSeek returns
+        # exactly this — HTTP 200, an `error` body, after holding the
+        # connection for its full 900s limit:
+        #
+        #   {"error": {"message": "We were unable to start processing your
+        #    request within the 900-second timeout limit..."}}
+        #
+        # Nothing about that shape is visible to the harness's classifiers: no
+        # status code on the exception, no fatal phrase, and httpx raises
+        # nothing because a well-formed response did arrive. It used to fall
+        # through to the generic retry, at ~15 minutes an attempt. Raising
+        # JudgeUnavailableError ends the run instead — the profile was never
+        # judged, so skipping it would spend a swipe on nothing (see
+        # judge_common.JudgeUnavailableError).
+        detail = payload.get("error") or payload
+        raise JudgeUnavailableError(
+            f"DeepSeek ({model}) served no completion: {str(detail)[:300]}"
+        )
     choice = choices[0]
     message = choice.get("message") or {}
 
