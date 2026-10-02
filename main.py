@@ -9,6 +9,7 @@ import random
 import re
 import sys
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -360,6 +361,13 @@ def main() -> int:
     duplicate_streak = 0
     dialog_streak = 0
     hit_like_cap = False
+    # Set by every path that ends the run on a failure, then consumed once
+    # at the bottom of main() to pick the webhook post. Reports used to go
+    # out at the failure site and the loop would still fall through to the
+    # success post, so an aborted run arrived as a red error *and* a green
+    # "Run Complete".
+    abort_reason: str | None = None
+    abort_screenshot: str | None = None
 
     while profiles_seen < config.MAX_PROFILES_PER_SESSION:
         profiles_seen += 1
@@ -379,8 +387,8 @@ def main() -> int:
                     msg = (f"Loading screen persisted after {dialog_streak} "
                            f"app restarts.")
                     print(f"GIVING UP: {msg}")
-                    report.post_error(msg, profiles_seen, likes_sent, skips,
-                                      screenshot_path=dialog_ss)
+                    abort_reason = msg
+                    abort_screenshot = dialog_ss
                     break
 
                 print(f"  Force-stopping + relaunching Hinge...")
@@ -462,6 +470,8 @@ def main() -> int:
         if fatal_error is not None:
             print(f"\nFATAL judge error — halting loop instead of burning "
                   f"Hinge swipes:\n  {fatal_error}")
+            abort_reason = ("Fatal judge error — halted instead of burning "
+                            f"Hinge swipes.\n{fatal_error}")
             break
         t_judge = time.monotonic() - t1
         if decision is None:
@@ -469,6 +479,9 @@ def main() -> int:
                 print(f"\nNETWORK ERROR on all 3 judge attempts — ending the "
                       f"run. Nothing was skipped; the next cron slot resumes "
                       f"from this profile.\n  {network_error}")
+                abort_reason = ("Network error on all 3 judge attempts — "
+                                "nothing was skipped; the next cron slot "
+                                f"resumes from this profile.\n{network_error}")
                 break
             print("Judge failed 3 times — skipping this profile to keep the loop alive.")
             do_skip()
@@ -518,8 +531,8 @@ def main() -> int:
                 msg = (f"Dialog recovery failed after back button + app restart. "
                        f"Last reason: {decision.reasoning[:200]}")
                 print(f"TIER 3: {msg}")
-                report.post_error(msg, profiles_seen, likes_sent, skips,
-                                  screenshot_path=dialog_ss)
+                abort_reason = msg
+                abort_screenshot = dialog_ss
                 break
 
             profiles_seen -= 1
@@ -594,16 +607,40 @@ def main() -> int:
     print(f"\nDone. {likes_sent} likes sent across {profiles_seen} profiles "
           f"(avg fit {avg_fit:.0f}/100).")
 
-    # Post-run report to Discord webhook (if configured)
-    report.post_run(likes_sent, profiles_seen, skips, total_cost, total_seconds,
-                    liked_profiles, avg_fit_score=avg_fit)
+    # Exactly one post per run — error or success, never both.
+    if abort_reason is not None:
+        report.post_error(abort_reason, profiles_seen, likes_sent, skips,
+                          screenshot_path=abort_screenshot)
+    else:
+        report.post_run(likes_sent, profiles_seen, skips, total_cost,
+                        total_seconds, liked_profiles, avg_fit_score=avg_fit)
 
     # Cleanup: force-stop Hinge so next run starts fresh regardless of app state,
     # then turn screen off.
     adb.force_stop_app("co.hinge.app")
     adb.turn_screen_off()
-    return 0
+
+    # An aborted run is not a success. This used to return 0 either way, so
+    # cron.log read "Done (exit 0)" for a run that died halfway — the exit
+    # code was the one signal the webhook couldn't stand in for.
+    return 1 if abort_reason is not None else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        # Nothing inside main() reports a crash: its handlers cover judge
+        # failures and stuck screens, but an exception anywhere else (an
+        # adb failure, a typo on a rarely-taken branch) used to die with a
+        # traceback in cron.log and no webhook post at all. That was the
+        # one failure class a channel set to "Only @mentions" would never
+        # surface, which is exactly backwards.
+        #
+        # An import-time error in this file still can't reach here — the
+        # module body fails before this block runs — so a missing module
+        # or bad dependency stays silent. Worth a launcher if that bites.
+        tb = traceback.format_exc()
+        print(tb, file=sys.stderr)
+        report.post_crash(tb)
+        sys.exit(1)

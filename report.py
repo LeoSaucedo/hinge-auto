@@ -117,31 +117,58 @@ def _send_multipart_payload(webhook_url: str, payload: dict,
         print(f"[report] webhook failed: {e.code} {e.read().decode()[:200]}")
 
 
-def post_error(message: str, profiles_seen: int, likes_sent: int,
-             skips: int, screenshot_path: str | None = None) -> None:
-    """Send a fatal-error embed to the Discord webhook.
+def _mention() -> str:
+    """Mention prefix for error posts, or "" when no ID is configured.
 
-    If screenshot_path is provided, the screenshot is attached as a file."""
+    This has to ride in the top-level `content`, never in the embed:
+    Discord notifies on mentions in a message's content but not on ones
+    rendered inside an embed. That is what lets the channel sit at
+    "Only @mentions" — silent for every routine post, and loud only for
+    the errors that carry this prefix.
+    """
+    uid = os.environ.get("DISCORD_MENTION_USER_ID", "").strip()
+    return f"<@{uid}> " if uid else ""
+
+
+def post_error(message: str, profiles_seen: int | None = None,
+               likes_sent: int | None = None, skips: int | None = None,
+               screenshot_path: str | None = None,
+               title: str = "❌ Hinge Auto — Run Aborted") -> None:
+    """Send a fatal-error embed to the Discord webhook, mentioning the user.
+
+    If screenshot_path is provided, the screenshot is attached as a file.
+
+    The run stats are optional because the crash handler at the bottom of
+    main.py has no frame to read them from — omitting the fields beats
+    posting a row of zeroes that reads like a real (empty) run."""
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
     if not webhook_url:
         return
 
     embed = {
-        "title": "❌ Hinge Auto — Run Aborted",
+        "title": title,
         "color": 0xED4245,
         "description": message,
-        "fields": [
-            {"name": "👀 Seen",  "value": str(profiles_seen), "inline": True},
-            {"name": "❤️ Likes", "value": str(likes_sent),    "inline": True},
-            {"name": "⏭️ Skips", "value": str(skips),         "inline": True},
-        ],
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
     }
+    fields = [{"name": name, "value": str(value), "inline": True}
+              for name, value in (("👀 Seen", profiles_seen),
+                                  ("❤️ Likes", likes_sent),
+                                  ("⏭️ Skips", skips))
+              if value is not None]
+    if fields:
+        embed["fields"] = fields
+
+    # Parse "users" only: the mention must ping, and no error post should
+    # ever be able to page a role or @everyone.
+    allowed_mentions = {"parse": ["users"]}
+    content = _mention() + title
 
     if screenshot_path:
         try:
             screenshot_bytes = Path(screenshot_path).read_bytes()
-            payload = {"embeds": [embed], "attachments": [
+            payload = {"content": content, "embeds": [embed],
+                       "allowed_mentions": allowed_mentions, "attachments": [
                 {"id": 0, "filename": "dialog_screenshot.png",
                  "description": "Dialog that blocked the run"}
             ]}
@@ -152,12 +179,31 @@ def post_error(message: str, profiles_seen: int, likes_sent: int,
         except Exception as e:
             print(f"[report] failed to attach screenshot: {e}")
 
-    _send_embed_only(webhook_url, embed)
+    _send_embed_only(webhook_url, embed,
+                     content=content, allowed_mentions=allowed_mentions)
 
 
-def _send_embed_only(webhook_url: str, embed: dict) -> None:
+def post_crash(tb: str, title: str = "💥 Hinge Auto — Crashed") -> None:
+    """Report an unhandled exception, with the traceback tail as the body.
+
+    Shared by main.py's own handler and the run.py launcher, which is the
+    only one of the two that can see an import-time failure."""
+    post_error(
+        f"Unhandled exception — the run died before finishing.\n"
+        f"```\n{tb[-1500:]}\n```",
+        title=title,
+    )
+
+
+def _send_embed_only(webhook_url: str, embed: dict, content: str = "",
+                     allowed_mentions: dict | None = None) -> None:
     """Send a single embed with no file attachments."""
-    body = json.dumps({"embeds": [embed]}).encode("utf-8")
+    payload = {"embeds": [embed]}
+    if content:
+        payload["content"] = content
+    if allowed_mentions:
+        payload["allowed_mentions"] = allowed_mentions
+    body = json.dumps(payload).encode("utf-8")
     req = urllib_request.Request(
         webhook_url,
         data=body,
