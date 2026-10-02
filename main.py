@@ -369,10 +369,43 @@ def main() -> int:
     # "Run Complete".
     abort_reason: str | None = None
     abort_screenshot: str | None = None
+    # Set when the run ends because the sibling bot has the phone. The
+    # cleanup below has to leave the device alone in that case.
+    sibling_has_phone = False
 
     while profiles_seen < config.MAX_PROFILES_PER_SESSION:
         profiles_seen += 1
         print(f"\n--- Profile {profiles_seen} ---")
+
+        # Shared-device guard. Both bots drive this one phone, and their cron
+        # slots are close enough (hinge odd hours, bumble even) that an
+        # overrun puts them on it at the same time — the sibling's
+        # launch_app() takes the foreground while this one keeps tapping.
+        # Everything below reads whatever is on screen, so a profile judged
+        # now would be the sibling's feed, and the like would be spent there.
+        # On 2026-10-01 that is exactly how both bots ended up reporting the
+        # same women.
+        #
+        # Only an exact match on the sibling package ends the run. None (no
+        # focused activity, or a dump that didn't parse) and any other package
+        # both fall through: aborting on "couldn't tell" would trade a rare
+        # wrong-feed tap for routinely losing slots, and the sibling merely
+        # sitting in the background is normal — what matters is who is in
+        # front. Checked here, at the top of the loop, so the answer is about
+        # the live screen rather than the launch that started the run.
+        sibling = getattr(config, "SIBLING_PACKAGE", "")
+        if sibling:
+            foreground = adb.foreground_package()
+            if foreground == sibling:
+                msg = (f"{sibling} is in the foreground — the sibling bot's "
+                       f"run has the phone. Ending this run rather than "
+                       f"judging its feed.")
+                print(f"\n{msg}")
+                abort_reason = msg
+                abort_screenshot = save_error_screenshot(
+                    "sibling-app-foreground")
+                sibling_has_phone = True
+                break
 
         t0 = time.monotonic()
         try:
@@ -647,7 +680,13 @@ def main() -> int:
     # Cleanup: force-stop Hinge so next run starts fresh regardless of app state,
     # then turn screen off.
     adb.force_stop_app("co.hinge.app")
-    adb.turn_screen_off()
+    if sibling_has_phone:
+        # This run ended because the sibling bot was mid-run on the shared
+        # phone. Turning the screen off now would hand it black screenshots
+        # for the rest of its slot — the opposite of the point of stopping.
+        print("Leaving the screen on — the sibling bot is still running.")
+    else:
+        adb.turn_screen_off()
 
     # An aborted run is not a success. This used to return 0 either way, so
     # cron.log read "Done (exit 0)" for a run that died halfway — the exit

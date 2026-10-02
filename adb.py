@@ -1,6 +1,7 @@
 """Thin wrapper around `adb` commands."""
 
 import random
+import re
 import shlex
 import subprocess
 import time
@@ -143,6 +144,31 @@ def is_screen_awake() -> bool:
     """Check if the device screen is on."""
     out = _run(["shell", "dumpsys", "power"], capture=True).decode()
     return "mWakefulness=Awake" in out
+
+
+# Package name inside the focused activity, out of a line shaped like
+#   mFocusedApp=ActivityRecord{41f1f08 u0 com.teslacoilsw.launcher/.NovaLauncher t1908}
+_FOCUSED_APP_RE = re.compile(
+    r"mFocusedApp=ActivityRecord\{[^}]*?\s([A-Za-z0-9_.]+)/"
+)
+
+
+def foreground_package() -> str | None:
+    """Package name of the app in the foreground, or None if unknown.
+
+    Filtered device-side with grep: the full `dumpsys window` dump is
+    hundreds of KB, and this is called once per profile. `|| true` keeps a
+    no-match (no focused activity, or an OEM that words the line
+    differently) from tripping _run's check=True — "no answer" is a
+    legitimate outcome here and the caller treats it as such.
+
+    Returns None rather than raising so a caller can distinguish "some other
+    app is in front" from "couldn't tell", which want opposite responses.
+    """
+    out = _run(["shell", "dumpsys window | grep -m1 mFocusedApp || true"],
+               capture=True)
+    match = _FOCUSED_APP_RE.search(out.decode("utf-8", "replace"))
+    return match.group(1) if match else None
 
 
 def wake_screen() -> None:
