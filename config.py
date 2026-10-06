@@ -169,6 +169,18 @@ DELAYS = {
 # "deepseek"  -> uses DeepSeek via DEEPSEEK_API_KEY; cheap vision backend.
 JUDGE_BACKEND = "anthropic"
 
+# Hard ceiling on ONE judge call, in seconds, enforced by
+# judge_common.call_with_deadline() on top of the backend's own HTTP timeout.
+# The HTTP timeout alone is not a bound: httpx times each read *operation*
+# separately, so a provider that keeps the socket alive while it queues the
+# request resets the timer on every byte. A 180s httpx timeout did not stop a
+# 947s DeepSeek call on 2026-10-01 (see judge_common.JudgeUnavailableError).
+#
+# Kept far above a healthy call — 4-8s on deepseek-flash, tens of seconds on
+# Anthropic — so it only ever fires on a provider that has stopped answering,
+# never on a slow but working one. Env override: JUDGE_DEADLINE_S in .env.
+JUDGE_DEADLINE_S = 180.0
+
 # ---------- Anthropic settings (when JUDGE_BACKEND == "anthropic") ----------
 # Sonnet is the default — cheaper than Opus and plenty capable for this task.
 # Switch to "claude-opus-4-7" if you want top-quality judgment, or

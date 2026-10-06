@@ -22,13 +22,30 @@ _DISCORD_ATTACHMENT_LIMIT = 10
 _DISCORD_FIELD_LIMIT = 1000
 
 
+def _format_duration(seconds: float) -> str:
+    """Duration for the embed footer: "42s", "3m 42s", "1h 5m".
+
+    Seconds are dropped past the hour mark because they stop carrying
+    information at that scale — the footer is a glance, and a run that
+    overran its slot should read as "1h 14m" at a glance, not "4470s".
+    """
+    total = int(round(seconds))
+    if total < 60:
+        return f"{total}s"
+    minutes, secs = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}m {secs}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes}m"
+
+
 def _footer(total_cost: float, total_duration_s: float,
             avg_fit_score: float) -> dict:
     """Embed footer: cost, duration, average fit, and the judge model — so a
     run's backend is identifiable from Discord when comparing backends."""
     return {
         "text": (
-            f"${total_cost:.2f} · {total_duration_s:.0f}s · "
+            f"${total_cost:.2f} · {_format_duration(total_duration_s)} · "
             f"avg fit {avg_fit_score:.0f}/100 · {metrics.active_model()}"
         )
     }

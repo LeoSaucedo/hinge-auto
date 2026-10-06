@@ -21,21 +21,47 @@ _S = config.SCALE_X
 # Template images (one-time load at module init)
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
 _heart_template: np.ndarray | None = None
-_sendlike_template: np.ndarray | None = None
+_sendlike_templates: list[tuple[str, np.ndarray]] | None = None
 
 _SENDLIKE_CONFIDENCE = 0.85
 _HEART_CONFIDENCE = 0.85
 
+# The button's label depends on the account's subscription: Hinge X
+# relabels it "Send Priority Like". Both wordings are tried and the
+# higher score wins, because the two are mutually exclusive at this
+# threshold — measured against the saved corpus, where the only frames
+# carrying the new label are the six error screenshots from the
+# 2026-10-06 11:00 run, and live profiles are a 260-frame sample:
+#
+#   template                  Hinge X card   plain card   live profile
+#   send_priority_like.jpg        0.999      0.553-0.578     <=0.386
+#   send_like.jpg                 0.707       0.997         <=0.448
+#
+# Keeping both costs one extra ~90 ms matchTemplate pass and covers a
+# lapsed subscription, which would otherwise fail every like — a failure
+# that only shows up as a run which skips every profile.
+#
+# The filename stem is the label in the log line, so there is no second
+# place to update when a label is added.
+_SENDLIKE_TEMPLATE_FILES = (
+    "send_priority_like.jpg",
+    "send_like.jpg",
+)
+
 
 def _load_templates() -> None:
     """Lazy-load template images from disk. Called once per session."""
-    global _heart_template, _sendlike_template
+    global _heart_template, _sendlike_templates
     heart_path = _TEMPLATE_DIR / "heart_template.jpg"
-    sendlike_path = _TEMPLATE_DIR / "sendlike_template.jpg"
     if _heart_template is None and heart_path.exists():
         _heart_template = cv2.imread(str(heart_path), cv2.IMREAD_COLOR)
-    if _sendlike_template is None and sendlike_path.exists():
-        _sendlike_template = cv2.imread(str(sendlike_path), cv2.IMREAD_COLOR)
+    if _sendlike_templates is None:
+        _sendlike_templates = [
+            (Path(name).stem,
+             cv2.imread(str(_TEMPLATE_DIR / name), cv2.IMREAD_COLOR))
+            for name in _SENDLIKE_TEMPLATE_FILES
+            if (_TEMPLATE_DIR / name).exists()
+        ]
 
 
 def _png_to_ndarray(png: bytes) -> np.ndarray:
@@ -53,11 +79,12 @@ def _png_to_array(png: bytes) -> np.ndarray:
 # ============================================================
 
 def find_send_like(png: bytes, log_miss: bool = False) -> tuple[int, int] | None:
-    """Locate the 'Send Like' button via OpenCV template matching.
+    """Locate the like button via OpenCV template matching.
 
-    Searches the right half of the screen. Returns (x, y) center of the
-    best match, or None if confidence is below threshold or the template
-    file is missing.
+    Searches the right half of the screen, trying each label's template
+    (see _SENDLIKE_TEMPLATE_FILES) and keeping the higher score. Returns
+    (x, y) center of the best match, or None if confidence is below
+    threshold or no template file is present.
 
     A miss is the *healthy* result at three of the four call sites — the
     stale-card check and both like-confirmation checks are asking "is a
@@ -67,13 +94,12 @@ def find_send_like(png: bytes, log_miss: bool = False) -> tuple[int, int] | None
     meant every profile logged a line that read like a fault.
     """
     _load_templates()
-    if _sendlike_template is None:
+    if not _sendlike_templates:
         print("  Send Like: no template file — skipping")
         return None
 
     screen = _png_to_ndarray(png)
     scr_h, scr_w = screen.shape[:2]
-    tmpl_h, tmpl_w = _sendlike_template.shape[:2]
 
     # Compose card sits in right half, middle 50% vertically
     y0 = int(scr_h * 0.25)
@@ -81,17 +107,28 @@ def find_send_like(png: bytes, log_miss: bool = False) -> tuple[int, int] | None
     x_crop = int(scr_w * 0.25)
     roi = screen[y0:y1, x_crop:]
 
-    result = cv2.matchTemplate(roi, _sendlike_template, cv2.TM_CCOEFF_NORMED)
-    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+    best: tuple[float, str, tuple[int, int]] | None = None
+    for label, tmpl in _sendlike_templates:
+        tmpl_h, tmpl_w = tmpl.shape[:2]
+        if roi.shape[0] < tmpl_h or roi.shape[1] < tmpl_w:
+            continue
+        result = cv2.matchTemplate(roi, tmpl, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+        if best is None or max_val > best[0]:
+            best = (max_val, label,
+                    (x_crop + max_loc[0] + tmpl_w // 2,
+                     y0 + max_loc[1] + tmpl_h // 2))
 
-    if max_val >= _SENDLIKE_CONFIDENCE:
-        cx = x_crop + max_loc[0] + tmpl_w // 2
-        cy = y0 + max_loc[1] + tmpl_h // 2
-        print(f"  Send Like: template match at ({cx}, {cy}) conf={max_val:.3f}")
+    if best is not None and best[0] >= _SENDLIKE_CONFIDENCE:
+        conf, label, (cx, cy) = best
+        print(f"  Send Like: template match at ({cx}, {cy}) conf={conf:.3f} "
+              f"[{label}]")
         return (cx, cy)
 
     if log_miss:
-        print(f"  Send Like: not found (conf={max_val:.3f} < {_SENDLIKE_CONFIDENCE})")
+        conf, label = best[:2] if best else (0.0, "none")
+        print(f"  Send Like: not found (conf={conf:.3f} < {_SENDLIKE_CONFIDENCE} "
+              f"[best: {label}])")
     return None
 
 
