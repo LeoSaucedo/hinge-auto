@@ -225,10 +225,11 @@ def do_like(message: str = "") -> None:
 
     # ── 8. Confirm the like actually went out ──
     # A sent like dismisses the compose card and advances the feed; a like
-    # that didn't take leaves the card (and its Send Like button) on screen.
+    # that didn't take leaves the card (and its like button) on screen.
     # Reuse find_send_like as the signal — measured on the saved debug
-    # corpus it scores 0.997 on open cards vs <=0.415 on live profiles, so
-    # the 0.85 threshold has a wide margin either side.
+    # corpus, each label's template scores >=0.997 on its own card variant
+    # vs <=0.43 on live profiles, so the 0.85 threshold has a wide margin
+    # either side. (The per-template numbers are in vision.py.)
     if vision.find_send_like(adb.screenshot()) is not None:
         # One more beat before calling it: a card that's mid-dismiss can
         # still register. Only the failure path pays this second look.
