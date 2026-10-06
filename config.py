@@ -313,12 +313,30 @@ SCALE_X = SCREEN_WIDTH / REF_WIDTH
 SCALE_Y = SCREEN_HEIGHT / REF_HEIGHT
 
 
+# The mode-overridable tuning keys, and the values a mode that leaves one
+# None falls back to. Snapshotting them here — after _apply_env_overrides()
+# above, before the first _apply_mode() call — makes the .env value the
+# baseline, so setting one of these in .env still works as a global default.
+#
+# The snapshot is what stops a mode switch from leaking: _apply_mode() runs
+# once at import (for .env's ACTIVE_MODE) and again after --mode parsing, so
+# without a reset `--mode cougar` would inherit the cap of whatever mode
+# .env selected instead of picking up the baseline.
+_MODE_OVERRIDABLE = (
+    "MAX_LIKES_PER_SESSION",
+    "MAX_PROFILES_PER_SESSION",
+)
+_MODE_DEFAULTS = {_k: globals()[_k] for _k in _MODE_OVERRIDABLE}
+
+
 def _apply_mode() -> None:
     """Resolve ACTIVE_MODE and populate this module's PREFERENCES /
-    AGE_MIN / AGE_MAX / MESSAGE_VOICE / MODE_NAME / cap overrides.
+    AGE_MIN / AGE_MAX / MESSAGE_VOICE / MODE_NAME and the cap overrides.
 
     Re-entrant — main.py calls this again after parsing --mode so a CLI
-    override takes effect before the judge sees config.
+    override takes effect before the judge sees config. Each call resets the
+    overridable caps to their defaults first, so switching modes can't leak
+    the previous mode's cap into a mode that leaves it None.
     """
     import modes
     mode = modes.load(ACTIVE_MODE)
@@ -329,10 +347,9 @@ def _apply_mode() -> None:
     g["MESSAGE_VOICE"] = getattr(mode, "MESSAGE_VOICE", None)
     g["MODE_NAME"] = mode.NAME
     g["PREMADES"] = list(getattr(mode, "PREMADES", []))
-    for k in ("MAX_LIKES_PER_SESSION", "MAX_PROFILES_PER_SESSION"):
+    for k in _MODE_OVERRIDABLE:
         v = getattr(mode, k, None)
-        if v is not None:
-            g[k] = v
+        g[k] = _MODE_DEFAULTS[k] if v is None else v
 
 
 _apply_mode()
