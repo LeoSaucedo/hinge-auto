@@ -19,19 +19,45 @@ import config
 # when overridden via .env.
 MODEL_PRICING: dict[str, dict[str, float]] = {
     # ---------- Anthropic ----------
+    # Rates from https://platform.claude.com/docs/en/about-claude/pricing
+    # (Oct 2026).
+    "claude-opus-5-5": {
+        "input_tokens":     4.00,
+        "output_tokens":   20.00,
+    },
+    "claude-sonnet-5-5": {
+        "input_tokens":     2.00,
+        "output_tokens":   10.00,
+    },
+    "claude-opus-4-7": {
+        "input_tokens":     5.00,
+        "output_tokens":   25.00,
+    },
     "claude-sonnet-4-6": {
         "input_tokens":     3.00,
         "output_tokens":   15.00,
     },
     "claude-haiku-4-5": {
-        "input_tokens":     0.80,
-        "output_tokens":    4.00,
-    },
-    "claude-opus-4-7": {
-        "input_tokens":    15.00,
-        "output_tokens":   75.00,
+        "input_tokens":     1.00,
+        "output_tokens":    5.00,
     },
     # ---------- Gemini ----------
+    # Rates from https://ai.google.dev/gemini-api/docs/pricing (Oct 2026).
+    "gemini-3.5-flash-lite": {
+        "input_tokens":     0.30,
+        "output_tokens":    2.50,
+    },
+    # 3.6 / 3.7 / 3.8 Flash share one schedule: $0.75/$3.75 now, doubling
+    # to $1.50/$7.50 on 2027-01-01. These are the current rates, so
+    # estimates will under-report once the step-up lands.
+    "gemini-3.6-flash": {
+        "input_tokens":     0.75,
+        "output_tokens":    3.75,
+    },
+    "gemini-3.7-flash": {
+        "input_tokens":     0.75,
+        "output_tokens":    3.75,
+    },
     "gemini-3.8-flash": {
         "input_tokens":     0.75,
         "output_tokens":    3.75,
@@ -40,17 +66,13 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
         "input_tokens":     1.50,
         "output_tokens":    9.00,
     },
-    "gemini-3.6-flash": {
-        "input_tokens":     1.50,
-        "output_tokens":    7.50,
-    },
     "gemini-3.1-flash-lite": {
         "input_tokens":     0.25,
         "output_tokens":    1.50,
     },
     "gemini-3-flash-preview": {
-        "input_tokens":     0.30,
-        "output_tokens":    1.00,
+        "input_tokens":     0.50,
+        "output_tokens":    3.00,
     },
     # ---------- DeepSeek ----------
     # deepseek-flash, peak rates. Peak windows are 01:00-04:00 and
