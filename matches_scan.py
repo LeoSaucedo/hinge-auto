@@ -48,6 +48,17 @@ COORDS_PATH = config.BASE_DIR / "matches_coords.json"
 LOG_PATH = config.DEBUG_DIR / "matches_log.jsonl"
 DEFAULT_FRAMES = 4
 
+# The two gestures below are written in reference pixels (config.REF_WIDTH
+# x config.REF_HEIGHT) and scaled here. They used to be passed to adb raw,
+# which on the 720x1600 device meant the scroll began at y=1900 — 300px
+# below the bottom edge — and the tap sat at x=540, a reference-width
+# centre. Same convention as vision.py's `_S`.
+#
+# `matches_tab` is deliberately not here: it comes from matches_coords.json,
+# which calibrate_matches.py writes per device.
+_SX = config.SCALE_X
+_SY = config.SCALE_Y
+
 
 # ---------- coords ----------
 
@@ -77,11 +88,13 @@ def open_matches_tab() -> None:
 
 
 def _scroll_matches() -> None:
-    """Swipe up to scroll the matches list by ~400px (less than the
-    global discover-feed scroll). A larger scroll in the matches view
-    triggers Hinge's section-collapse behavior on the active section,
-    so we keep the gesture short."""
-    adb.swipe(540, 1900, 540, 1500, 400)
+    """Swipe up to scroll the matches list a short way — ~400 reference px,
+    which is ~265 on a 720x1600 device and well under the discover feed's
+    660. A larger scroll in the matches view triggers Hinge's
+    section-collapse behavior on the active section, so we keep the gesture
+    short."""
+    x = int(540 * _SX)
+    adb.swipe(x, int(1900 * _SY), x, int(1500 * _SY), 400)
     adb.jitter_sleep("after_scroll")
 
 
@@ -99,7 +112,7 @@ def _try_expand_their_turn(frames: list[bytes]) -> bytes | None:
     """
     if not frames:
         return None
-    adb.tap(540, 1264)
+    adb.tap(int(540 * _SX), int(1264 * _SY))
     adb.jitter_sleep("after_tap")
     time.sleep(0.6)
     return adb.screenshot()

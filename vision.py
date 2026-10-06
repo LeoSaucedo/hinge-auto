@@ -180,18 +180,36 @@ def is_app_loading(png: bytes) -> bool:
     near-white. A loaded profile has a photo card, text overlays, and
     UI buttons that fill most of the screen with non-white pixels.
 
-    Uses a simple white-pixel ratio across the full content area
-    (excluding status bar and nav bar). If >75% of pixels are
-    near-white (≥230), it's a loading screen. On a real profile,
-    photos and text bring this below the threshold.
+    Uses two measurements over the full content area (excluding status
+    bar and nav bar), both of which must hold:
 
-    Measured at 720x1600 over 200 sampled profiles: real profile = 0.44
-    median, 0.62 max at the capture position. That margin is narrower
-    than the Bumble sibling's (profile ~0.17, splash ~0.98) because
-    Hinge floats each photo card on a white background rather than
-    filling the screen with it. Mid-scroll frames reach 0.94, so this
-    test is only safe because the guard runs before the first scroll —
-    do not move the call site later in capture_profile().
+        white_ratio > 0.75 — the area is overwhelmingly near-white (≥230)
+        dark_ratio  < 0.02 — and carries none of the profile chrome
+
+    Measured at 720x1600 at the capture position:
+
+        real profiles    white 0.44 median, 0.59 max; dark 0.37 median
+        profile "K"      white 0.88-0.93;              dark 0.029-0.076
+        genuine loading  white 0.987;                  dark 0.012
+
+    The white test alone cannot separate the middle two. A profile
+    whose photo card is a white-background line-art illustration is as
+    white as a splash screen — a 1.06x gap — and on 2026-09-27 that
+    tripped the guard in three separate runs, each of which restarted
+    the app onto the same unchanged profile and gave up after three
+    strikes. Nothing about that is transient, so the restart ladder
+    could never clear it. The dark test separates the two by 2.45x:
+    every real profile carries name text, prompt text, or the black
+    action buttons, and a blank splash screen carries none. Across
+    2,490 captured frames no profile fell below dark 0.036, so 0.02
+    sits in an empty band with margin on both sides.
+
+    That white margin is still narrower than the Bumble sibling's
+    (profile ~0.17, splash ~0.98) because Hinge floats each photo card
+    on a white background rather than filling the screen with it.
+    Mid-scroll frames reach 0.94, so this test is only safe because
+    the guard runs before the first scroll — do not move the call site
+    later in capture_profile().
     """
     im = np.array(Image.open(io.BytesIO(png)).convert("L"))
     h, w = im.shape
@@ -218,5 +236,10 @@ def is_app_loading(png: bytes) -> bool:
     if content.size == 0:
         return False
 
+    # Both must hold. Whiteness alone flags a white-background photo
+    # card as a splash screen; the dark-pixel floor is what separates
+    # a blank screen from a rendered profile. 130 matches the text
+    # threshold used by comment_field_text_pixels.
     white_ratio = (content > 230).mean()
-    return white_ratio > 0.75
+    dark_ratio = (content < 130).mean()
+    return white_ratio > 0.75 and dark_ratio < 0.02
