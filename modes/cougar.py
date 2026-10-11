@@ -6,8 +6,7 @@ mode behind the "AI bot dates an older crowd" framing some viewers
 asked about.
 
 Demonstrates capabilities the basic examples don't:
-  - AGE_MIN / AGE_MAX (judge-side age gate; pair with --set-filters
-    to also drive Hinge's in-app slider)
+  - AGE_MIN / AGE_MAX (judge-side age gate)
   - Inline MESSAGE_VOICE (a multi-line voice string instead of
     referencing voice/<name>.py)
   - Themed PREMADES that lean into a specific opener angle
@@ -22,14 +21,12 @@ shared examples).
 """
 
 NAME = "cougar"
-DESCRIPTION = (
-    "Targets older age band (33-44) with young-buck-themed openers. "
-    "Pair with `python main.py --mode cougar --set-filters` to also "
-    "drive Hinge's in-app age slider."
-)
+DESCRIPTION = "Targets older age band (33-44) with young-buck-themed openers."
 
-# Hinge in-app filter can also enforce this — but the judge-side gate
-# is a backstop in case the filter snaps off (Hinge+ tiering, etc).
+# Enforced judge-side only: _age_clause() in judge_common.py has the judge
+# score 0 with dominant_factor="age" when a visible age falls outside this
+# band, which the harness turns into a skip. Hinge's own age filter is a
+# manual app setting — set it by hand if you want it to agree.
 AGE_MIN = 33
 AGE_MAX = 44
 

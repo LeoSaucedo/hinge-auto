@@ -100,11 +100,6 @@ wrong for the user's emulator.
    before/after, and have them sanity-check that the coords look like
    what they read off the screenshot.
 
-If the user wants to use `--set-filters`, `--location`, or
-`--rotate`, they also need to run `calibrate_filters.py` /
-`calibrate_matches.py` and hand-edit `location_coords.json` (no
-interactive helper exists for the location picker yet).
-
 ### Phase 4 — Write a mode
 
 1. Show the user `modes/example_lenient.py` and `modes/example_strict.py`
@@ -142,8 +137,10 @@ prompt rewrites or photo reorder before the first swipe session.
 
 1. Leave `MAX_LIKES_PER_SESSION = 8` (default — matches free Hinge's
    daily cap) and `DRY_RUN = False` (default).
-2. Have the user start the loop: `python main.py` (with Hinge open
-   on the Discover tab). Watch the printed decisions live.
+2. Have the user start the loop: `python run.py` (with Hinge open
+   on the Discover tab). Watch the printed decisions live. `run.py` is a
+   thin wrapper over `main.py` that also reports failures raised before
+   the loop starts; `python main.py` works the same for a live session.
 3. Stop with Ctrl-C if anything looks wrong — a weird opener, a like
    that should've been a skip, etc.
 4. Review `debug/session_log.jsonl` together. Walk through the
@@ -167,6 +164,17 @@ Dry-run guidance by tier (see Hard Constraints):
 ## Architecture orientation (for when the user asks "where does X live")
 
 - `main.py` — loop runner; capture → judge → act.
+- `run.py` — cron entry point and outer crash net: imports `main` inside
+  a `try` so an import-time failure still reaches Discord, then passes
+  `main()`'s exit code through. `main()` returns 1 on abort, 0 on a
+  clean run, so `cron.log`'s `Done (exit N)` line distinguishes them.
+- `report.py` — Discord webhook posts. Error and crash posts @mention
+  the user ID in `DISCORD_MENTION_USER_ID`; the mention has to be in the
+  top-level `content`, since Discord ignores mentions rendered inside an
+  embed. With the channel set to "Only @mentions", routine posts stay
+  silent and failures ping — so a user asking "why didn't I get
+  notified?" usually has a channel-level notification setting to check,
+  not a bug here.
 - `judge_common.py` — backend-agnostic system prompt, tool schema,
   `Decision` dataclass, voice resolver.
 - `judge.py` — Anthropic backend.
@@ -180,8 +188,6 @@ Dry-run guidance by tier (see Hard Constraints):
   from modes.
 - `adb.py` / `vision.py` — emulator I/O and per-profile UI element
   detection.
-- `filters.py` / `locations.py` — optional in-app filter automation;
-  need calibrated coord files.
 - `metrics.py` — JSONL session logging.
 - `matches_scan.py` — separate Matches-tab scraper for analytics;
   Anthropic-only.
@@ -263,12 +269,8 @@ When this happens, don't just shrug — you can fix it in-session.
 
 ### Things NOT to auto-patch
 
-- Anything that requires multiple drags (e.g. the Age slider thumb
-  anchors). Hand those off to `calibrate_filters.py`, which already
-  does the math.
-- Anything that needs the user to confirm a screen-state change
-  (e.g. the location picker flow). Walk the user through it; don't
-  guess.
+- Anything that requires multiple drags, or that needs the user to
+  confirm a screen-state change. Walk the user through it; don't guess.
 
 ## Things to push back on
 

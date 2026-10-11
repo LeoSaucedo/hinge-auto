@@ -12,8 +12,10 @@ actual preferences — they exist as scaffolding.
 NAME = "example_lenient"
 DESCRIPTION = "Generous baseline: default LIKE, skip only on bot/spam/empty tells."
 
-# Hinge's in-app age filter is the right place to set an age band. Leaving
-# these as None means the judge doesn't enforce an age gate.
+# Leaving these as None means the judge enforces no age gate. To restrict
+# by age, set them here — and optionally set Hinge's own age filter by hand
+# in the app, which keeps out-of-range profiles from reaching the judge at
+# all. See cougar.py for a mode that sets a band.
 AGE_MIN = None
 AGE_MAX = None
 

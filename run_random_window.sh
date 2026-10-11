@@ -31,7 +31,7 @@ require_ssd  # re-check: the sleep above can outlast an unplug
 source .venv/bin/activate
 
 # The `|| EXIT_CODE=$?` below is load-bearing, not decoration. Under the
-# `set -e` at the top, a bare `python -u main.py` kills this script the
+# `set -e` at the top, a bare `python -u run.py` kills this script the
 # instant the run fails — before the next two lines get to report it. So
 # the Done line only ever printed on success, which is precisely when it
 # says nothing useful, and the log's last line on any failure was whatever
@@ -45,6 +45,6 @@ source .venv/bin/activate
 # succeeds the || branch never executes, and `set -u` would abort on an
 # unset EXIT_CODE at the echo below — the same bug in a different costume.
 EXIT_CODE=0
-python -u main.py 2>&1 || EXIT_CODE=$?
+python -u run.py 2>&1 || EXIT_CODE=$?
 echo "[$(date)] Done (exit $EXIT_CODE)"
 exit $EXIT_CODE
