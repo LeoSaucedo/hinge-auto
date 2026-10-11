@@ -4,10 +4,12 @@ Loop: capture profile frames -> ask Claude -> tap like or skip -> repeat.
 """
 
 import argparse
+import fcntl
 import hashlib
 import random
 import re
 import sys
+import tempfile
 import time
 import traceback
 from datetime import datetime
@@ -24,7 +26,8 @@ import config
 import metrics
 import report
 import vision
-from judge_common import (apply_fit_threshold, is_fatal_judge_error,
+from judge_common import (apply_fit_threshold, call_with_deadline,
+                          is_fatal_judge_error, is_judge_unavailable,
                           is_network_error, load_backend)
 
 judge = load_backend().judge
@@ -222,10 +225,11 @@ def do_like(message: str = "") -> None:
 
     # ── 8. Confirm the like actually went out ──
     # A sent like dismisses the compose card and advances the feed; a like
-    # that didn't take leaves the card (and its Send Like button) on screen.
+    # that didn't take leaves the card (and its like button) on screen.
     # Reuse find_send_like as the signal — measured on the saved debug
-    # corpus it scores 0.997 on open cards vs <=0.415 on live profiles, so
-    # the 0.85 threshold has a wide margin either side.
+    # corpus, each label's template scores >=0.997 on its own card variant
+    # vs <=0.43 on live profiles, so the 0.85 threshold has a wide margin
+    # either side. (The per-template numbers are in vision.py.)
     if vision.find_send_like(adb.screenshot()) is not None:
         # One more beat before calling it: a card that's mid-dismiss can
         # still register. Only the failure path pays this second look.
@@ -311,6 +315,37 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _acquire_run_lock(serial: str):
+    """Take the one-run-at-a-time lock on `serial`, or None if another run
+    already holds it.
+
+    hinge-auto and bumble-auto drive the same phone, and an overrun puts
+    both on it at once: the second one's launch_app() takes the foreground
+    while the first keeps tapping, judging and liking whatever feed is now
+    in front of it — which is how the two of them came to report the same
+    women on 2026-10-01.
+
+    flock rather than a look at what's on screen, so that nothing here has
+    to know another bot exists, let alone which package it uses: a new
+    automation joins the contention by running, without every existing bot
+    being edited. The kernel releases the lock when its holder dies —
+    SIGKILL and reboot included — so a wedged run can't lock out the next
+    slot.
+
+    Hold the returned handle for as long as the run lasts: closing it, or
+    letting it be collected, releases the lock. Process exit is the only
+    unlock, on purpose.
+    """
+    path = Path(tempfile.gettempdir()) / f"dating-bot-{serial}.lock"
+    handle = open(path, "w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
 def main() -> int:
     args = _parse_args()
     load_dotenv()
@@ -321,6 +356,16 @@ def main() -> int:
 
     serial = adb.check_device()
     print(f"Connected to: {serial}")
+
+    # Held (never closed) for the rest of the process; see the docstring.
+    run_lock = _acquire_run_lock(serial)
+    if run_lock is None:
+        msg = (f"Another run already has the phone ({serial}) — cancelling "
+               f"this one without touching it. The next cron slot picks it "
+               f"up.")
+        print(f"\n{msg}")
+        report.post_error(msg, title="🔒 Hinge Auto — Run Skipped (phone busy)")
+        return 1
     age_band = (
         f"age {config.AGE_MIN}-{config.AGE_MAX}"
         if (config.AGE_MIN is not None or config.AGE_MAX is not None)
@@ -442,9 +487,18 @@ def main() -> int:
         decision = None
         fatal_error = None
         network_error = None
+        unavailable_error = None
         for attempt in range(3):
             try:
-                decision = judge(frames)
+                # Every attempt runs under a wall-clock ceiling. The
+                # backend's own httpx timeout is per read *operation*, so a
+                # provider that holds the socket open while it queues the
+                # request resets it on every byte and never trips it — a 180s
+                # httpx timeout did not stop a 947s DeepSeek call. See
+                # judge_common.call_with_deadline.
+                decision = call_with_deadline(
+                    lambda: judge(frames), config.JUDGE_DEADLINE_S
+                )
                 break
             except Exception as e:
                 err = repr(e)
@@ -457,6 +511,16 @@ def main() -> int:
                 # instead of matching Anthropic's wording only.
                 if is_fatal_judge_error(e):
                     fatal_error = err
+                    break
+                # The provider says it never ran the request at all — it shed
+                # load, or held the connection past JUDGE_DEADLINE_S. Unlike
+                # a network blip this doesn't get retried: the request sat in
+                # the provider's queue, so another attempt buys another full
+                # wait, and on 2026-10-01 three of them cost ~47 minutes and
+                # ran a 20-minute session to 74. Usually clears by the next
+                # cron slot; the profile is left unswiped for it.
+                if is_judge_unavailable(e):
+                    unavailable_error = err
                     break
                 # A network error is different in kind: it usually clears on
                 # its own, so it doesn't cut the attempts short. But if it
@@ -472,6 +536,15 @@ def main() -> int:
                   f"Hinge swipes:\n  {fatal_error}")
             abort_reason = ("Fatal judge error — halted instead of burning "
                             f"Hinge swipes.\n{fatal_error}")
+            break
+        if unavailable_error is not None:
+            print(f"\nJUDGE UNAVAILABLE — the provider never ran the request; "
+                  f"ending the run. Nothing was skipped; the next cron slot "
+                  f"resumes from this profile.\n  {unavailable_error}")
+            abort_reason = ("Judge provider unavailable — it shed load or "
+                            "stopped answering, so no profile was judged. "
+                            "Nothing was skipped; the next cron slot resumes "
+                            f"from this profile.\n{unavailable_error}")
             break
         t_judge = time.monotonic() - t1
         if decision is None:

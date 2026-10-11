@@ -8,8 +8,9 @@ A backend module needs to expose `judge(frames: list[bytes]) -> Decision`.
 """
 
 import re
+import threading
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -567,6 +568,92 @@ def is_network_error(exc: BaseException) -> bool:
             return True
         cur = cur.__cause__ or cur.__context__
     return False
+
+
+# ── Provider-capacity errors ──────────────────────────────────────────
+# A provider shedding load can answer with a perfectly ordinary HTTP 200 and
+# an error body where `choices` should be. DeepSeek does exactly that under
+# queue pressure, and the shape is what makes it dangerous: the request sits
+# in their queue for the full 900s limit — connection held open the whole
+# time — and only then does the error arrive.
+#
+# Measured on 2026-10-01: one such response held a single judge call for
+# 947.53s (session_log.jsonl, "judge=947.53s"). Three in a row cost ~47
+# minutes. Bumble's 20-minute run finished at 74 minutes and ran straight
+# through Hinge's cron slot on the shared phone; both bots then reported the
+# same women (annacara/kat/erin) at overlapping times, because nothing checks
+# which app is actually in front before tapping.
+#
+# The old code couldn't tell this apart from an ordinary transient failure:
+# the 200 path attached no status, the body matched no fatal phrase, and
+# httpx raised nothing — so it retried, three times, at ~15 minutes each.
+#
+# Deliberately NOT retried, for the same reason a network error isn't: the
+# request never reached the model, so the profile was never judged, and
+# force-skipping it would spend a real swipe on nothing. The run ends and the
+# next cron slot resumes from this profile.
+class JudgeUnavailableError(RuntimeError):
+    """The provider couldn't serve this request — it shed load, or held the
+    connection past our own deadline."""
+
+
+def is_judge_unavailable(exc: BaseException) -> bool:
+    """True if `exc` means the provider never ran the request.
+
+    Walks the exception chain the way is_fatal_judge_error does, so wrapper
+    layers don't hide the cause.
+    """
+    seen = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, JudgeUnavailableError):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def call_with_deadline(fn: Callable[[], Any], deadline_s: float,
+                       what: str = "The judge") -> Any:
+    """Run fn() with a hard wall-clock ceiling of `deadline_s` seconds.
+
+    httpx's timeout is per read *operation*, not per request: every byte the
+    peer sends resets the timer, so a provider that holds the socket open
+    while it queues the work sails past REQUEST_TIMEOUT_S indefinitely. A
+    180s httpx timeout did not stop a 947s DeepSeek call. Joining a thread is
+    the only bound that holds regardless of what the peer sends.
+
+    Raises JudgeUnavailableError when the deadline passes — see that class
+    for why the caller ends the run instead of retrying. On timeout the
+    worker is left running and abandoned, deliberately:
+
+      - It's a plain daemon thread, not a ThreadPoolExecutor worker.
+        ThreadPoolExecutor registers an atexit hook that joins its workers,
+        so an abandoned request would block interpreter shutdown for exactly
+        as long as the provider felt like holding the connection — turning a
+        bounded judge call into a hung cron slot.
+      - Nothing reads its result once the deadline has passed; the box it
+        writes to is only consulted when the join returned in time.
+    """
+    box: dict[str, Any] = {}
+
+    def _worker() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as e:  # re-raised on the calling thread
+            box["error"] = e
+
+    worker = threading.Thread(target=_worker, daemon=True)
+    worker.start()
+    worker.join(deadline_s)
+    if worker.is_alive():
+        raise JudgeUnavailableError(
+            f"{what} did not return within {deadline_s:.0f}s — abandoning the "
+            f"call. The provider is holding the connection open."
+        )
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
 
 
 def load_backend():

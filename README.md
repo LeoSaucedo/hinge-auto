@@ -108,6 +108,24 @@ wrong: Ctrl-C, edit `PREFERENCES` in your mode file, re-run.
 raised before the loop starts — see [Failure alerts](#failure-alerts).
 `python main.py` still works if you'd rather run the loop directly.
 
+To try a change out on a handful of profiles instead of a full session,
+set the limits in front of the command:
+
+```bash
+MAX_PROFILES_PER_SESSION=4 MAX_LIKES_PER_SESSION=2 SESSION_LIKE_MIN=2 python main.py
+```
+
+`load_dotenv()` doesn't overwrite variables that are already set in the
+environment, so a value set this way beats `.env` for that run only —
+nothing to undo afterwards, and `run.py` passes none of them, so a
+scheduled run is unaffected. `MAX_PROFILES_PER_SESSION` caps profiles
+*seen*: a skip counts toward it exactly like a like does, so it is not a
+like cap. `MAX_LIKES_PER_SESSION` is the top of the session's random
+like-cap draw, whose floor is `SESSION_LIKE_MIN` — lower both, since a
+floor above the ceiling leaves the draw no valid range. A mode file's own
+non-`None` values win over the environment; every mode shipped here leaves
+them unset.
+
 ## Failure alerts
 
 An aborted run is not a success, and a silent one is worse. Two things
