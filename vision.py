@@ -20,7 +20,7 @@ _S = config.SCALE_X
 
 # Template images (one-time load at module init)
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
-_heart_template: np.ndarray | None = None
+_heart_templates: list[tuple[str, np.ndarray]] | None = None
 _sendlike_templates: list[tuple[str, np.ndarray]] | None = None
 
 _SENDLIKE_CONFIDENCE = 0.85
@@ -48,13 +48,42 @@ _SENDLIKE_TEMPLATE_FILES = (
     "send_like.jpg",
 )
 
+# The photo-1 like glyph moves with the app version too: Hinge 10.8.0
+# (auto-updated 2026-10-14 14:50) added a small nested "priority like"
+# heart inside the existing outline. Both are tried and the higher score
+# wins, same as the composer labels above — mutually exclusive at this
+# threshold, measured over the saved corpus (the 63 heart-not-found
+# error frames from the first evening on 10.8.0, and the 28 liked
+# profiles from that morning's runs):
+
+#   template                    10.8.0 frames     pre-10.8.0 frames
+#   heart_template_priority.jpg  0.870 (63/63)      0.628 best
+#   heart_template.jpg           0.621 best         0.874 (28/28)
+
+# "hit" is the top-most in-feed match, the score the threshold actually
+# gates — exactly 0.870 on all 63 frames, 0.874 on all 28. The other
+# template's *best* score anywhere in the search ROI stays <= 0.63, so
+# only one template can clear 0.85 on a given frame.
+#
+# A stale single template fails every like with "couldn't find photo-1
+# heart" (2026-10-14 afternoon: 63 like decisions, 0 sent), so this
+# costs one extra matchTemplate pass to keep covering the old glyph.
+_HEART_TEMPLATE_FILES = (
+    "heart_template_priority.jpg",
+    "heart_template.jpg",
+)
+
 
 def _load_templates() -> None:
     """Lazy-load template images from disk. Called once per session."""
-    global _heart_template, _sendlike_templates
-    heart_path = _TEMPLATE_DIR / "heart_template.jpg"
-    if _heart_template is None and heart_path.exists():
-        _heart_template = cv2.imread(str(heart_path), cv2.IMREAD_COLOR)
+    global _heart_templates, _sendlike_templates
+    if _heart_templates is None:
+        _heart_templates = [
+            (Path(name).stem,
+             cv2.imread(str(_TEMPLATE_DIR / name), cv2.IMREAD_COLOR))
+            for name in _HEART_TEMPLATE_FILES
+            if (_TEMPLATE_DIR / name).exists()
+        ]
     if _sendlike_templates is None:
         _sendlike_templates = [
             (Path(name).stem,
@@ -139,18 +168,18 @@ def find_send_like(png: bytes, log_miss: bool = False) -> tuple[int, int] | None
 def find_first_heart(png: bytes) -> tuple[int, int] | None:
     """Locate the heart icon on photo 1 via OpenCV template matching.
 
-    Searches the right ~40% of the screen across the full height.
-    Finds all heart matches above confidence and returns the top-most
-    one (smallest Y = highest on screen = photo 1).
+    Searches the right ~40% of the screen across the full height, trying
+    each glyph's template (see _HEART_TEMPLATE_FILES). Finds all matches
+    above confidence and returns the top-most one (smallest Y = highest
+    on screen = photo 1).
     """
     _load_templates()
-    if _heart_template is None:
+    if not _heart_templates:
         print("  Heart vision: no template file — skipping")
         return None
 
     screen = _png_to_ndarray(png)
     scr_h, scr_w = screen.shape[:2]
-    tmpl_h, tmpl_w = _heart_template.shape[:2]
 
     x0 = int(scr_w * 0.60)
     x1 = scr_w
@@ -158,24 +187,39 @@ def find_first_heart(png: bytes) -> tuple[int, int] | None:
     y1 = int(scr_h * 0.90)
     roi = screen[y0:y1, x0:x1]
 
-    result = cv2.matchTemplate(roi, _heart_template, cv2.TM_CCOEFF_NORMED)
+    # Per template, the top-most match above threshold; across templates
+    # the top-most of those. Candidates compare by glyph center Y, not by
+    # match top edge — the two crops carry different margins, so top
+    # edges would rank the templates a few pixels apart on equal glyphs.
+    best_miss: tuple[float, str] = (0.0, "none")
+    candidates: list[tuple[int, int, float, str, int]] = []
+    for label, tmpl in _heart_templates:
+        tmpl_h, tmpl_w = tmpl.shape[:2]
+        if roi.shape[0] < tmpl_h or roi.shape[1] < tmpl_w:
+            continue
+        result = cv2.matchTemplate(roi, tmpl, cv2.TM_CCOEFF_NORMED)
+        if float(result.max()) > best_miss[0]:
+            best_miss = (float(result.max()), label)
+        locations = np.where(result >= _HEART_CONFIDENCE)
+        if len(locations[0]) == 0:
+            continue
+        best_idx = locations[0].argmin()
+        match_y = int(locations[0][best_idx])
+        match_x = int(locations[1][best_idx])
+        candidates.append((y0 + match_y + tmpl_h // 2,
+                           x0 + match_x + tmpl_w // 2,
+                           float(result[match_y, match_x]), label,
+                           len(locations[0])))
 
-    # Find all matches above threshold, pick the top-most (smallest Y).
-    locations = np.where(result >= _HEART_CONFIDENCE)
-    if len(locations[0]) == 0:
-        best = result.max()
-        print(f"  Heart vision: not found (best conf={best:.3f} < {_HEART_CONFIDENCE})")
+    if not candidates:
+        conf, label = best_miss
+        print(f"  Heart vision: not found (best conf={conf:.3f} < "
+              f"{_HEART_CONFIDENCE} [best: {label}])")
         return None
 
-    best_idx = locations[0].argmin()
-    match_y = locations[0][best_idx]
-    match_x = locations[1][best_idx]
-    best_conf = result[match_y, match_x]
-
-    cx = x0 + match_x + tmpl_w // 2
-    cy = y0 + match_y + tmpl_h // 2
-    print(f"  Heart vision: top match at ({cx}, {cy}) conf={best_conf:.3f} "
-          f"({len(locations[0])} total above threshold)")
+    cy, cx, conf, label, above = min(candidates, key=lambda c: c[0])
+    print(f"  Heart vision: top match at ({cx}, {cy}) conf={conf:.3f} "
+          f"[{label}] ({above} total above threshold)")
     return (cx, cy)
 
 
