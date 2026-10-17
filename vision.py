@@ -26,24 +26,41 @@ _sendlike_templates: list[tuple[str, np.ndarray]] | None = None
 _SENDLIKE_CONFIDENCE = 0.85
 _HEART_CONFIDENCE = 0.85
 
-# The button's label depends on the account's subscription: Hinge X
-# relabels it "Send Priority Like". Both wordings are tried and the
-# higher score wins, because the two are mutually exclusive at this
-# threshold — measured against the saved corpus, where the only frames
-# carrying the new label are the six error screenshots from the
-# 2026-10-06 11:00 run, and live profiles are a 260-frame sample:
+# The button's appearance varies twice over: the label depends on the
+# account's subscription (Hinge X relabels it "Send Priority Like"), and
+# Hinge 10.8.0 (auto-updated 2026-10-14 14:50) restyled that button from
+# dark-on-light to white-on-black. Each variant is tried and the higher
+# score wins, because they are mutually exclusive at this threshold.
+#
+# 2026-10-06, the label split — the only frames carrying the new label
+# are the six error screenshots from that day's 11:00 outage, and live
+# profiles are a 260-frame sample:
 #
 #   template                  Hinge X card   plain card   live profile
 #   send_priority_like.jpg        0.999      0.553-0.578     <=0.386
 #   send_like.jpg                 0.707       0.997         <=0.448
 #
-# Keeping both costs one extra ~90 ms matchTemplate pass and covers a
-# lapsed subscription, which would otherwise fail every like — a failure
-# that only shows up as a run which skips every profile.
+# 2026-10-15, the restyle — the composer screenshots that day's failing
+# runs saved, the four 10-06 frames, and live profile frames from both
+# UIs:
+#
+#   template                      10.8.0 card   10.6-era card   profiles
+#   send_priority_like_dark.jpg     1.000          <=0.53        <=0.56
+#   send_priority_like.jpg          <=0.35          1.000        <=0.36
+#   send_like.jpg                   <=0.43          0.708        <=0.49
+#
+# Keeping all three costs two extra ~90 ms matchTemplate passes and
+# covers a lapsed subscription, which would otherwise fail every like —
+# a failure that only shows up as a run which skips every profile. Those
+# off-card ceilings matter too: this same lookup is the "is a card still
+# on screen?" signal at the stale-card check and both like-confirmation
+# checks, so every score on a card-less frame has to stay well clear of
+# 0.85 or a like that never went out reads as sent.
 #
 # The filename stem is the label in the log line, so there is no second
 # place to update when a label is added.
 _SENDLIKE_TEMPLATE_FILES = (
+    "send_priority_like_dark.jpg",
     "send_priority_like.jpg",
     "send_like.jpg",
 )
