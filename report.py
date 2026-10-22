@@ -149,11 +149,13 @@ def _mention() -> str:
 
 def post_error(message: str, profiles_seen: int | None = None,
                likes_sent: int | None = None, skips: int | None = None,
-               screenshot_path: str | None = None,
+               screenshot_paths: list[str] | None = None,
                title: str = "❌ Hinge Auto — Run Aborted") -> None:
     """Send a fatal-error embed to the Discord webhook, mentioning the user.
 
-    If screenshot_path is provided, the screenshot is attached as a file.
+    If screenshot_paths is provided, each readable file is attached.
+    Unreadable paths are skipped so one stale screenshot cannot drop the
+    whole post back to text-only.
 
     The run stats are optional because the crash handler at the bottom of
     main.py has no frame to read them from — omitting the fields beats
@@ -181,20 +183,38 @@ def post_error(message: str, profiles_seen: int | None = None,
     allowed_mentions = {"parse": ["users"]}
     content = _mention() + title
 
-    if screenshot_path:
+    files: list[tuple[str, bytes]] = []
+    used_names: set[str] = set()
+    for path in (screenshot_paths or [])[:_DISCORD_ATTACHMENT_LIMIT]:
         try:
-            screenshot_bytes = Path(screenshot_path).read_bytes()
-            payload = {"content": content, "embeds": [embed],
-                       "allowed_mentions": allowed_mentions, "attachments": [
-                {"id": 0, "filename": "dialog_screenshot.png",
-                 "description": "Dialog that blocked the run"}
-            ]}
-            _send_multipart_payload(
-                webhook_url, payload,
-                [("dialog_screenshot.png", screenshot_bytes)])
+            data = Path(path).read_bytes()
+        except Exception as e:
+            print(f"[report] failed to read screenshot {path}: {e}")
+            continue
+        name = Path(path).name or "screenshot.png"
+        stem, suffix = Path(name).stem, Path(name).suffix or ".png"
+        candidate, n = name, 2
+        while candidate in used_names:
+            candidate = f"{stem}-{n}{suffix}"
+            n += 1
+        used_names.add(candidate)
+        files.append((candidate, data))
+
+    if files:
+        try:
+            payload = {
+                "content": content, "embeds": [embed],
+                "allowed_mentions": allowed_mentions,
+                "attachments": [
+                    {"id": i, "filename": name,
+                     "description": f"Failure screenshot {i + 1} of {len(files)}"}
+                    for i, (name, _) in enumerate(files)
+                ],
+            }
+            _send_multipart_payload(webhook_url, payload, files)
             return
         except Exception as e:
-            print(f"[report] failed to attach screenshot: {e}")
+            print(f"[report] failed to attach screenshots: {e}")
 
     _send_embed_only(webhook_url, embed,
                      content=content, allowed_mentions=allowed_mentions)
