@@ -165,7 +165,17 @@ Dry-run guidance by tier (see Hard Constraints):
 
 - `main.py` — loop runner; capture → judge → act. Three consecutive Send
   Like failures abort the run and attach the failure screenshots to the
-  error post.
+  error post. A "Send a Rose instead?" sheet that intercepts Send Like is
+  resolved in place with one tap; a sheet that survives that tap and Back
+  aborts the run immediately (never skip while a sheet is up — the skip X
+  lands on the sheet's margin and does nothing). A rose tap on an empty
+  balance opens the rose purchase page; that is detected by its heading,
+  backed out of with Back, and finished as a normal like — a purchase page
+  that survives Back aborts the run (`RosePurchaseStuck`), and no buy
+  button is ever tapped. Rose eligibility
+  (`SEND_ROSES`, `ROSE_FIT_THRESHOLD`, `MAX_ROSES_PER_SESSION`) is decided
+  in the loop; `do_like(prefer_rose=...)` acts on it and returns whether a
+  rose was spent.
 - `run.py` — cron entry point and outer crash net: imports `main` inside
   a `try` so an import-time failure still reaches Discord, then passes
   `main()`'s exit code through. `main()` returns 1 on abort, 0 on a
@@ -176,7 +186,8 @@ Dry-run guidance by tier (see Hard Constraints):
   embed. With the channel set to "Only @mentions", routine posts stay
   silent and failures ping — so a user asking "why didn't I get
   notified?" usually has a channel-level notification setting to check,
-  not a bug here.
+  not a bug here. Likes that carried a rose get a 🌹 on their `Liked`
+  line in the run post.
 - `judge_common.py` — backend-agnostic system prompt, tool schema,
   `Decision` dataclass, voice resolver.
 - `judge.py` — Anthropic backend.
@@ -189,7 +200,9 @@ Dry-run guidance by tier (see Hard Constraints):
 - `voice/` — message-style templates referenced by `MESSAGE_VOICE`
   from modes.
 - `adb.py` / `vision.py` — emulator I/O and per-profile UI element
-  detection.
+  detection (hearts, Send Like, rose sheet buttons, the 0-rose count area
+  vs any nonzero count including two-digit balances, rose purchase page
+  heading).
 - `metrics.py` — JSONL session logging.
 - `matches_scan.py` — separate Matches-tab scraper for analytics;
   Anthropic-only.

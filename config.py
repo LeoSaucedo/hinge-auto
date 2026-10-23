@@ -76,6 +76,25 @@ MAX_PROFILES_PER_SESSION = 100
 # Env override: FIT_SCORE_MIN in .env.
 FIT_SCORE_MIN = 50
 
+# ---------- Roses ----------
+# A Rose is a Like with a rose attached: it jumps to the front of the
+# recipient's Likes You queue. The account holds a small number (the
+# lavender pill left of Send Like in the composer shows the count), so
+# spend it only on likes the judge rates highest.
+#
+# Threshold math from the 25 runs ending 2026-10-22: 233 like decisions,
+# 47 with fit_score >= 62 — the top 20.2% of likes. All-time p80 is 68.
+# The per-session cap is what actually bounds spending, though: a strong
+# batch can easily hold several >=62 likes, and the threshold alone would
+# spend every rose in the account. Availability comes from the pill: Hinge
+# draws a "0" when the balance is empty, and its whole count area is
+# compared with that image (two digits included), so anything else counts
+# as at least one rose. An empty balance after all is caught
+# by the purchase-page handler, which backs out and sends a normal like.
+SEND_ROSES = True              # kill switch; also env-overridable
+ROSE_FIT_THRESHOLD = 62        # like-fit score at/above which a rose is spent
+MAX_ROSES_PER_SESSION = 1      # independent guard on actual spend
+
 # ---------- Device settings ----------
 # Shipped default is a 720x1600 screen. Override SCREEN_WIDTH/SCREEN_HEIGHT
 # in .env for a different device — every value in COORDS below is a raw pixel

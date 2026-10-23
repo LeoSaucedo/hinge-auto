@@ -150,6 +150,40 @@ the error post; skips between like attempts don't reset the streak, and a
 like that goes through does. The threshold is `SEND_LIKE_STREAK_LIMIT` in
 `main.py`.
 
+Hinge sometimes intercepts a Send Like with a **"Send a Rose instead?"**
+bottom sheet. Its scrim dims the compose card enough that the card check
+cannot see it, so before this was handled the like looked sent and the
+next profile was silently spent on the leftover card. `do_like` now
+detects the sheet by its two buttons and resolves it with one tap — "Send
+Like anyway" for a normal like, "Send a Rose" only when the rose was
+asked for. If the sheet survives that tap, it is backed out of and the
+profile skipped; if it survives Back too, the run aborts immediately with
+`RoseSheetStuck` rather than tapping blindly, because the skip X cannot
+reach through the sheet.
+
+When a rose is wanted (`fit_score >= ROSE_FIT_THRESHOLD` and the session
+rose cap allows it), the composer's lavender rose-count pill is read
+before any tap and tapped directly. Hinge draws a "0" count when the
+balance is empty; the dark ink of the whole count area is compared with
+the 0-rose image (mask IoU), and anything that is not that exact count
+counts as having at least one rose, so a count of 2+ — including
+two-digit balances like 10 — does not block a spend. (Matching only the
+count area matters: the pill is mostly flat lavender, so a whole-pill
+comparison scores a 3-rose pill at 0.965 against the 0-rose image and
+would misread it as empty; comparing only a tight crop around the "0"
+could be fooled by a right-aligned "10" whose "0" lands in the same
+place.) A missing pill or a count that cannot be read falls back to a
+normal Like.
+
+If the balance was empty anyway (an app state the pill image missed), the
+rose tap opens the **rose purchase page** — a wall of buy buttons. That
+page is recognized by its heading; the bot presses Back and then sends an
+ordinary Like from the restored composer. It never taps a control on the
+purchase page, and if Back does not clear it the run aborts with
+`RosePurchaseStuck`. The setting is `SEND_ROSES`, with
+`ROSE_FIT_THRESHOLD` (default 62 = top ~20% of like scores) and
+`MAX_ROSES_PER_SESSION` (default 1) as the guard rails.
+
 The mention rides in the message *content* because that's the only place
 Discord notifies from; one rendered inside an embed is inert.
 `allowed_mentions` is pinned to `users`, so no error post can page a role
@@ -234,14 +268,14 @@ ADB capture    →  frame stitching  →  LLM judge         →  action
 | Module | Role |
 |---|---|
 | **`adb.py`** | Wraps the `adb` CLI: screenshot, tap, swipe, type, keyboard dismiss. Handles device IME failures gracefully. |
-| **`main.py`** | The orchestration loop. For each profile: scroll-to-top, capture N frames, run through judge, then skip or like + message. Error handling with screenshot capture, recovery via skip. Every abort sets `abort_reason` plus any failure screenshots, consumed once at the end so a run posts exactly one webhook — error or success — and exits 1. Three consecutive Send Like failures abort the run instead of burning the profile cap. |
+| **`main.py`** | The orchestration loop. For each profile: scroll-to-top, capture N frames, run through judge, then skip or like + message. Error handling with screenshot capture, recovery via skip. Every abort sets `abort_reason` plus any failure screenshots, consumed once at the end so a run posts exactly one webhook — error or success — and exits 1. Three consecutive Send Like failures abort the run instead of burning the profile cap; a stuck "Send a Rose instead?" sheet or rose purchase page aborts immediately rather than tapping through it. Rose eligibility (fit threshold + per-session cap) is decided here; `do_like` carries it out. |
 | **`run.py`** | Cron entry point and outer crash net. Imports `main` inside a `try` so an import-time failure still reaches Discord, then passes `main()`'s exit code through. |
 | **`judge_common.py`** | Backend-agnostic pipeline: system prompt template, JSON tool schema, `Decision` dataclass, voice resolver, and `load_backend()` dispatcher. |
 | **`judge.py`** | Anthropic Claude backend — vision + forced tool call. |
 | **`judge_deepseek.py`** | DeepSeek backend — vision + forced tool call (OpenAI-compatible REST, no SDK). |
 | **`judge_gemini.py`** | Google Gemini backend — vision + function declaration. |
 | **`judge_ollama.py`** | Ollama backend (cloud or local). |
-| **`vision.py`** | Finds UI elements via pixel-level template matching: heart icon on photo 1, Send Like button, comment input area. |
+| **`vision.py`** | Finds UI elements via pixel-level template matching: heart icon on photo 1, Send Like button, comment input area, the "Send a Rose instead?" sheet's two buttons, the composer's rose pill (color/size mask + 0-rose count-area match), and the rose purchase page heading. |
 | **`modes/`** | Rubric files. Loaded by `config._apply_mode()` which populates `PREFERENCES`, `AGE_MIN/MAX`, `MESSAGE_VOICE`, and `PREMADES`. |
 | **`voice/`** | Opener-tone templates that modes can reference by name. |
 | **`metrics.py`** | Tracks per-profile cost (model-aware pricing), timing, and writes JSONL to `debug/session_log.jsonl`. |
@@ -256,7 +290,7 @@ ADB capture    →  frame stitching  →  LLM judge         →  action
 1. ADB captures 7 profile screenshots top-to-bottom
 2. Frames + system prompt sent to the active judge backend
 3. Judge returns structured `Decision` (like/skip, confidence, reasoning, message)
-4. `do_like()` taps heart, opens compose card, types opener, taps Send Like
+4. `do_like()` taps heart, opens compose card, types opener, then taps the rose pill (top-fit likes, when the pill is not the 0-rose count) or Send Like; a "Send a Rose instead?" sheet is resolved in place, and a rose tap that lands on the purchase page is backed out of and finished as a normal like
 5. Keyboard issues handled automatically — dismissed if covering UI, NPEs caught gracefully
 6. Metrics logged, Discord stats posted
 7. Loops until like cap hit or profiles exhausted
@@ -277,6 +311,8 @@ improvements beyond the original:
 - **Error screenshots** — debug captures on failure saved to `debug/errors/` (override the whole debug output dir via `DEBUG_DIR` in `.env`)
 - **Failure alerting** — error posts @mention a configured user so the channel can sit at "Only @mentions"; aborts post exactly once (no red-and-green pair) and exit non-zero, and crashes are reported instead of only landing in `cron.log`
 - **Send Like circuit breaker** — three consecutive Send Like failures abort the run and attach each failed attempt's screenshot, so a Hinge UI change is caught in minutes instead of after a wasted 100-profile run
+- **"Send a Rose instead?" sheet handling** — the upsell sheet no longer swallows a like: it is detected by its two buttons and resolved in place, with a stuck sheet aborting the run instead of tapping through it
+- **Roses for top-fit likes** — the composer's rose pill count is checked against the 0-rose image before sending, and a rose goes out for likes in the configured top slice; the session cap is independent of the threshold. The check compares the whole count area's ink, so a two-digit balance such as 10 is not mistaken for 0. If the balance is empty anyway, the purchase page is detected, backed out of, and the like is sent without a rose — no buy button is ever tapped. The run log announces when a rose is specifically wanted, and a rose-bearing like is marked 🌹 in the Discord report
 - **Bot detection evasion** — randomized scroll distance, tap jitter, action delays, session timing
 
 ## License
