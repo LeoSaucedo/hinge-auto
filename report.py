@@ -52,9 +52,15 @@ def _footer(total_cost: float, total_duration_s: float,
 
 
 def _liked_line(n: int, p: dict) -> str:
-    """One line of the `Liked` field, exactly as it will be rendered."""
+    """One line of the `Liked` field, exactly as it will be rendered.
+
+    A like that carried a rose is marked with 🌹 so the spend is visible
+    next to the profile it went to; the line length accounting in
+    `_batch_by_size` measures this rendered form, emoji included.
+    """
+    rose = " 🌹" if p.get("rose") else ""
     return (f"{n}. **{p['name']}** — {p['msg']} "
-            f"(fit {p.get('fit_score', 0)}/100)")
+            f"(fit {p.get('fit_score', 0)}/100){rose}")
 
 
 def _batch_by_size(profile_data: list[dict]) -> list[list[tuple[int, dict]]]:
@@ -149,6 +155,7 @@ def _mention() -> str:
 
 def post_error(message: str, profiles_seen: int | None = None,
                likes_sent: int | None = None, skips: int | None = None,
+               roses_sent: int | None = None,
                screenshot_paths: list[str] | None = None,
                title: str = "❌ Hinge Auto — Run Aborted") -> None:
     """Send a fatal-error embed to the Discord webhook, mentioning the user.
@@ -159,7 +166,9 @@ def post_error(message: str, profiles_seen: int | None = None,
 
     The run stats are optional because the crash handler at the bottom of
     main.py has no frame to read them from — omitting the fields beats
-    posting a row of zeroes that reads like a real (empty) run."""
+    posting a row of zeroes that reads like a real (empty) run. A
+    `roses_sent` count adds a 🌹 field only when a rose actually went out,
+    so a rose spent before the abort is still visible in Discord."""
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
     if not webhook_url:
         return
@@ -175,6 +184,11 @@ def post_error(message: str, profiles_seen: int | None = None,
                                   ("❤️ Likes", likes_sent),
                                   ("⏭️ Skips", skips))
               if value is not None]
+    # Only when a rose actually went out; a run that sent none stays a
+    # three-field row instead of showing "0".
+    if roses_sent:
+        fields.append({"name": "🌹 Roses", "value": str(roses_sent),
+                       "inline": True})
     if fields:
         embed["fields"] = fields
 
@@ -291,6 +305,7 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
             "name": name,
             "msg": msg,
             "fit_score": profile.get("fit_score", 0),
+            "rose": bool(profile.get("rose")),
             "bytes": photo_bytes,
         })
 
