@@ -139,8 +139,16 @@ cover that:
   Developer Mode → Copy User ID) and set the channel's notification
   setting to **Only @mentions**. "Run Complete" embeds still arrive but
   make no noise; errors — loading-screen give-up, dialog recovery
-  exhausted, fatal judge error, network outage, or an unhandled crash —
-  carry a real mention and ping. Leave the variable unset for no mention.
+  exhausted, fatal judge error, network outage, three consecutive Send
+  Like failures, or an unhandled crash — carry a real mention and ping.
+  Leave the variable unset for no mention.
+
+A Send Like failure is the button missing after the heart tap, or the
+compose card still being open after the tap. Three in a row on like
+attempts aborts the run and attaches each failure's debug screenshot to
+the error post; skips between like attempts don't reset the streak, and a
+like that goes through does. The threshold is `SEND_LIKE_STREAK_LIMIT` in
+`main.py`.
 
 The mention rides in the message *content* because that's the only place
 Discord notifies from; one rendered inside an embed is inert.
@@ -226,7 +234,7 @@ ADB capture    →  frame stitching  →  LLM judge         →  action
 | Module | Role |
 |---|---|
 | **`adb.py`** | Wraps the `adb` CLI: screenshot, tap, swipe, type, keyboard dismiss. Handles device IME failures gracefully. |
-| **`main.py`** | The orchestration loop. For each profile: scroll-to-top, capture N frames, run through judge, then skip or like + message. Error handling with screenshot capture, recovery via skip. Every abort sets `abort_reason`, consumed once at the end so a run posts exactly one webhook — error or success — and exits 1. |
+| **`main.py`** | The orchestration loop. For each profile: scroll-to-top, capture N frames, run through judge, then skip or like + message. Error handling with screenshot capture, recovery via skip. Every abort sets `abort_reason` plus any failure screenshots, consumed once at the end so a run posts exactly one webhook — error or success — and exits 1. Three consecutive Send Like failures abort the run instead of burning the profile cap. |
 | **`run.py`** | Cron entry point and outer crash net. Imports `main` inside a `try` so an import-time failure still reaches Discord, then passes `main()`'s exit code through. |
 | **`judge_common.py`** | Backend-agnostic pipeline: system prompt template, JSON tool schema, `Decision` dataclass, voice resolver, and `load_backend()` dispatcher. |
 | **`judge.py`** | Anthropic Claude backend — vision + forced tool call. |
@@ -268,6 +276,7 @@ improvements beyond the original:
 - **Session caps** — configurable min/max likes per session with random roll
 - **Error screenshots** — debug captures on failure saved to `debug/errors/` (override the whole debug output dir via `DEBUG_DIR` in `.env`)
 - **Failure alerting** — error posts @mention a configured user so the channel can sit at "Only @mentions"; aborts post exactly once (no red-and-green pair) and exit non-zero, and crashes are reported instead of only landing in `cron.log`
+- **Send Like circuit breaker** — three consecutive Send Like failures abort the run and attach each failed attempt's screenshot, so a Hinge UI change is caught in minutes instead of after a wasted 100-profile run
 - **Bot detection evasion** — randomized scroll distance, tap jitter, action delays, session timing
 
 ## License

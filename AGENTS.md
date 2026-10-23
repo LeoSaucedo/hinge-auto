@@ -163,7 +163,9 @@ Dry-run guidance by tier (see Hard Constraints):
 
 ## Architecture orientation (for when the user asks "where does X live")
 
-- `main.py` — loop runner; capture → judge → act.
+- `main.py` — loop runner; capture → judge → act. Three consecutive Send
+  Like failures abort the run and attach the failure screenshots to the
+  error post.
 - `run.py` — cron entry point and outer crash net: imports `main` inside
   a `try` so an import-time failure still reaches Discord, then passes
   `main()`'s exit code through. `main()` returns 1 on abort, 0 on a

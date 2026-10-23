@@ -44,9 +44,10 @@ Always write a short opener for this profile. The harness decides whether
 it's actually used — a high fit_score sends it with a like, a low one
 discards it. You don't decide; just draft a best-effort opener.
 
-Aim for: one specific reference to something visible in the profile (a
-prompt answer or a concrete photo detail), followed by a short question
-about it. Keep it friendly and curious. Around 60-120 characters total.
+Aim for: one specific reference to something visible in the first photo (an
+outfit, an object, the setting, what she's doing), followed by a short
+question about it. Keep it friendly and curious. Around 60-120 characters
+total.
 
 Constraints:
 - Plain ASCII only. No emoji, no smart quotes, no em-dashes.
@@ -106,13 +107,15 @@ DECIDE_INPUT_SCHEMA = {
             "type": "string",
             "description": (
                 "Answer this BEFORE writing `message`: name the one "
-                "specific, visible detail in screenshot 1 — the photo the "
-                "like goes out next to — that the opener will be about, "
-                "e.g. \"denim jacket\", \"the dog on the couch\". Describe "
-                "what you actually see in that photo. Do not name a detail "
-                "from a prompt answer or from a later screenshot. Empty "
-                "string only if screenshot 1 has no visible hook at all, "
-                "in which case the opener falls back to a playful "
+                "specific, visible detail inside the first photo — the "
+                "picture at the top of screenshot 1, the card the like goes "
+                "out on — that the opener will be about, e.g. \"denim "
+                "jacket\", \"the dog on the couch\". It must be something "
+                "inside the picture itself, never text from the prompt card "
+                "under it or from a later screenshot; prompt text stays "
+                "off-limits even when it is fully readable in screenshot 1. "
+                "Empty string only if the picture has no visible hook at "
+                "all, in which case the opener falls back to a playful "
                 "either/or per the message rubric."
             ),
         },
@@ -215,14 +218,26 @@ def first_frame_label(n: int) -> str:
     """Text appended after the screenshots in the model's input.
 
     send_like() re-scrolls to the top of the profile before tapping the
-    heart, so the like always goes out next to the first photo and the
-    opener has to anchor there. Saying so in the user message, right before
-    the model starts emitting fields, beats saying it in the system prompt
+    heart, so the like always goes out on the first *photo* and the opener
+    has to anchor there. Saying so in the user message, right before the
+    model starts emitting fields, beats saying it in the system prompt
     thousands of tokens earlier.
+
+    "A detail visible in screenshot 1" was not enough on its own. In the
+    Hinge layout the first prompt card sits directly under the first photo
+    and is fully readable in that same screenshot — with its own heart
+    button — so the model satisfied the letter of the rule by riffing on
+    prompt text while the comment still went out attached to the photo.
+    Measured 2026-10-11: 16-21% of recent openers, per the model's own
+    prompt_referenced labels. Name the two cards and which one the like
+    attaches to, or the text wins — it is the most quotable thing on screen.
     """
     return (
-        f"Screenshot 1 of {n}. The like goes out next to THIS photo, so the "
-        "opener must reference a detail visible in it."
+        f"Screenshot 1 of {n}: the like goes out on the photo at the top — "
+        "the picture itself, not the prompt card under it (that is a separate "
+        "card with its own like button). The opener must reference something "
+        "visible inside that picture — never text from a prompt card, and "
+        "never anything in a later screenshot."
     )
 
 

@@ -136,6 +136,27 @@ class FeedAlreadyAdvanced(RuntimeError):
     """
 
 
+# Consecutive Send Like failures (button not found, or the card never
+# closed) mean the send path is broken, not that one profile was unlucky.
+# Sitting on it burns profiles without sending likes, so the run gives up
+# at this streak and reports every failure screenshot.
+SEND_LIKE_STREAK_LIMIT = 3
+
+
+class SendLikeFailure(RuntimeError):
+    """do_like reached the Send Like step and that step failed.
+
+    Carries the debug screenshot saved at the failure site so main() can
+    attach it to the run's single abort post. main() aborts after
+    SEND_LIKE_STREAK_LIMIT of these on consecutive like attempts; skips
+    and failures before the Send Like step leave the streak untouched.
+    """
+
+    def __init__(self, message: str, screenshot_path: str | None = None):
+        super().__init__(message)
+        self.screenshot_path = screenshot_path
+
+
 def _dismiss_compose_card_if_visible() -> None:
     """Check for a stale compose card from a previous failed like.
 
@@ -212,8 +233,10 @@ def do_like(message: str = "") -> None:
     adb.dismiss_keyboard_if_visible()
     send_xy = vision.find_send_like(adb.screenshot(), log_miss=True)
     if send_xy is None:
-        save_error_screenshot("send-like-not-found")
-        raise RuntimeError("vision: couldn't find Send Like after heart tap")
+        raise SendLikeFailure(
+            "vision: couldn't find Send Like after heart tap",
+            screenshot_path=_screenshot_or_none("send-like-not-found"),
+        )
     print(f"Tapping Send Like at {send_xy} — sending like! 🎯")
     adb.tap(*send_xy)
     adb.jitter_sleep("after_like_sent")
@@ -235,7 +258,6 @@ def do_like(message: str = "") -> None:
         # still register. Only the failure path pays this second look.
         time.sleep(1.5)
         if vision.find_send_like(adb.screenshot()) is not None:
-            save_error_screenshot("like-not-confirmed")
             # Deliberately no attempt to close the card here. The compose
             # overlay has no close control of its own — the only X on screen
             # is skip_button, which floats above the card and dismisses it by
@@ -246,8 +268,9 @@ def do_like(message: str = "") -> None:
             # here. Measured against the saved debug corpus, that point is the
             # "Dating Intent" filter chip on every card screenshot we have —
             # it opened a second overlay instead of clearing the first.)
-            raise RuntimeError(
-                "like not confirmed: compose card still open after Send Like tap"
+            raise SendLikeFailure(
+                "like not confirmed: compose card still open after Send Like tap",
+                screenshot_path=_screenshot_or_none("like-not-confirmed"),
             )
 
     # Confirmed — the feed has advanced to a new profile at the top.
@@ -271,6 +294,16 @@ def save_error_screenshot(context: str) -> str:
     path = errors_dir / f"{ts}_{context}.png"
     path.write_bytes(png)
     return str(path)
+
+
+def _screenshot_or_none(context: str) -> str | None:
+    """save_error_screenshot, but never let a capture failure replace the
+    original error the caller is reporting."""
+    try:
+        return save_error_screenshot(context)
+    except Exception as e:
+        print(f"WARN: could not save error screenshot ({context}): {e!r}")
+        return None
 
 
 def save_debug(frames: list[bytes], decision, profile_idx: int) -> str | None:
@@ -405,6 +438,8 @@ def main() -> int:
     last_frame0_hash: str | None = None
     duplicate_streak = 0
     dialog_streak = 0
+    send_like_streak = 0
+    send_like_screenshots: list[str] = []
     hit_like_cap = False
     # Set by every path that ends the run on a failure, then consumed once
     # at the bottom of main() to pick the webhook post. Reports used to go
@@ -412,7 +447,7 @@ def main() -> int:
     # success post, so an aborted run arrived as a red error *and* a green
     # "Run Complete".
     abort_reason: str | None = None
-    abort_screenshot: str | None = None
+    abort_screenshots: list[str] = []
 
     while profiles_seen < config.MAX_PROFILES_PER_SESSION:
         profiles_seen += 1
@@ -433,7 +468,7 @@ def main() -> int:
                            f"app restarts.")
                     print(f"GIVING UP: {msg}")
                     abort_reason = msg
-                    abort_screenshot = dialog_ss
+                    abort_screenshots = [dialog_ss]
                     break
 
                 print(f"  Force-stopping + relaunching Hinge...")
@@ -605,7 +640,7 @@ def main() -> int:
                        f"Last reason: {decision.reasoning[:200]}")
                 print(f"TIER 3: {msg}")
                 abort_reason = msg
-                abort_screenshot = dialog_ss
+                abort_screenshots = [dialog_ss]
                 break
 
             profiles_seen -= 1
@@ -624,6 +659,9 @@ def main() -> int:
         if decision.decision == "like":
             try:
                 do_like(decision.message)
+                # A sent like proves the whole compose flow works again.
+                send_like_streak = 0
+                send_like_screenshots = []
                 liked_profiles.append({
                     "name": decision.name,
                     "message": decision.message,
@@ -644,6 +682,27 @@ def main() -> int:
                 # profile as well — one no judge ever scored.
                 print(f"do_like aborted: {e} — feed already advanced, "
                       f"not skipping again.")
+                skips += 1
+            except SendLikeFailure as e:
+                send_like_streak += 1
+                if e.screenshot_path:
+                    send_like_screenshots.append(e.screenshot_path)
+                print(f"Send Like failed ({send_like_streak}/"
+                      f"{SEND_LIKE_STREAK_LIMIT}): {e}")
+                if send_like_streak >= SEND_LIKE_STREAK_LIMIT:
+                    msg = (f"Send Like failed {send_like_streak} consecutive "
+                           f"like attempts — halted instead of burning more "
+                           f"profiles.\nLast error: {e}")
+                    print(f"GIVING UP: {msg}")
+                    abort_reason = msg
+                    abort_screenshots = list(send_like_screenshots)
+                    break
+                print("  Recovering by skipping this profile.")
+                try:
+                    do_skip()
+                except Exception as e2:
+                    print(f"do_skip recovery also failed: {e2!r} — "
+                          f"loop will retry next iter.")
                 skips += 1
             except Exception as e:
                 save_error_screenshot(f"do-like-failed-{profiles_seen}")
@@ -683,7 +742,7 @@ def main() -> int:
     # Exactly one post per run — error or success, never both.
     if abort_reason is not None:
         report.post_error(abort_reason, profiles_seen, likes_sent, skips,
-                          screenshot_path=abort_screenshot)
+                          screenshot_paths=abort_screenshots)
     else:
         report.post_run(likes_sent, profiles_seen, skips, total_cost,
                         total_seconds, liked_profiles, avg_fit_score=avg_fit)
