@@ -38,14 +38,22 @@ _CAL_DIR = config.BASE_DIR
 # strip; icons are roughly evenly spaced. These are STARTING GUESSES —
 # calibration writes the real value.
 #
-# Unlike vision.py's offsets these are NOT multiplied by config.SCALE_X, so
-# on a smaller screen _GUESS_Y_BOTTOM_NAV lands below the bottom edge.
-# Flagged rather than changed here: that is a behaviour fix, not a docs one.
-_GUESS_X_BY_NAV_POSITION = {
+_REF_X_BY_NAV_POSITION = {
     # 5-icon nav: Discover · Standouts · Likes-You · Matches · Profile
     1: 108, 2: 324, 3: 540, 4: 756, 5: 972,
 }
-_GUESS_Y_BOTTOM_NAV = 2310
+_REF_Y_BOTTOM_NAV = 2310
+
+# Scaled like vision.py's offsets rather than left in reference pixels.
+# Unscaled, positions 4 and 5 sat past the right edge of a 720-wide screen
+# and _GUESS_Y_BOTTOM_NAV sat 710px below the bottom of a 1600px one — so
+# step 2 offered the user coordinates that could not appear in the capture
+# it had just asked them to read. Scaled, the x values match config.COORDS'
+# nav_* entries exactly.
+_GUESS_X_BY_NAV_POSITION = {
+    pos: int(x * config.SCALE_X) for pos, x in _REF_X_BY_NAV_POSITION.items()
+}
+_GUESS_Y_BOTTOM_NAV = int(_REF_Y_BOTTOM_NAV * config.SCALE_Y)
 
 
 def _capture(name: str) -> bytes:
@@ -94,7 +102,7 @@ def main() -> int:
         x, y = (int(s.strip()) for s in raw.split(","))
     else:
         pos = int(raw) if raw else 4
-        x = _GUESS_X_BY_NAV_POSITION.get(pos, 756)
+        x = _GUESS_X_BY_NAV_POSITION.get(pos, _GUESS_X_BY_NAV_POSITION[4])
         y = _GUESS_Y_BOTTOM_NAV
     print(f"  Will use matches_tab = ({x}, {y})")
 

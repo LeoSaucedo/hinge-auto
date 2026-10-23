@@ -4,11 +4,14 @@ Loop: capture profile frames -> ask Claude -> tap like or skip -> repeat.
 """
 
 import argparse
+import fcntl
 import hashlib
 import random
 import re
 import sys
+import tempfile
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -23,7 +26,8 @@ import config
 import metrics
 import report
 import vision
-from judge_common import (apply_fit_threshold, is_fatal_judge_error,
+from judge_common import (apply_fit_threshold, call_with_deadline,
+                          is_fatal_judge_error, is_judge_unavailable,
                           is_network_error, load_backend)
 
 judge = load_backend().judge
@@ -132,6 +136,27 @@ class FeedAlreadyAdvanced(RuntimeError):
     """
 
 
+# Consecutive Send Like failures (button not found, or the card never
+# closed) mean the send path is broken, not that one profile was unlucky.
+# Sitting on it burns profiles without sending likes, so the run gives up
+# at this streak and reports every failure screenshot.
+SEND_LIKE_STREAK_LIMIT = 3
+
+
+class SendLikeFailure(RuntimeError):
+    """do_like reached the Send Like step and that step failed.
+
+    Carries the debug screenshot saved at the failure site so main() can
+    attach it to the run's single abort post. main() aborts after
+    SEND_LIKE_STREAK_LIMIT of these on consecutive like attempts; skips
+    and failures before the Send Like step leave the streak untouched.
+    """
+
+    def __init__(self, message: str, screenshot_path: str | None = None):
+        super().__init__(message)
+        self.screenshot_path = screenshot_path
+
+
 def _dismiss_compose_card_if_visible() -> None:
     """Check for a stale compose card from a previous failed like.
 
@@ -208,8 +233,10 @@ def do_like(message: str = "") -> None:
     adb.dismiss_keyboard_if_visible()
     send_xy = vision.find_send_like(adb.screenshot(), log_miss=True)
     if send_xy is None:
-        save_error_screenshot("send-like-not-found")
-        raise RuntimeError("vision: couldn't find Send Like after heart tap")
+        raise SendLikeFailure(
+            "vision: couldn't find Send Like after heart tap",
+            screenshot_path=_screenshot_or_none("send-like-not-found"),
+        )
     print(f"Tapping Send Like at {send_xy} — sending like! 🎯")
     adb.tap(*send_xy)
     adb.jitter_sleep("after_like_sent")
@@ -221,16 +248,16 @@ def do_like(message: str = "") -> None:
 
     # ── 8. Confirm the like actually went out ──
     # A sent like dismisses the compose card and advances the feed; a like
-    # that didn't take leaves the card (and its Send Like button) on screen.
+    # that didn't take leaves the card (and its like button) on screen.
     # Reuse find_send_like as the signal — measured on the saved debug
-    # corpus it scores 0.997 on open cards vs <=0.415 on live profiles, so
-    # the 0.85 threshold has a wide margin either side.
+    # corpus, each label's template scores >=0.997 on its own card variant
+    # vs <=0.43 on live profiles, so the 0.85 threshold has a wide margin
+    # either side. (The per-template numbers are in vision.py.)
     if vision.find_send_like(adb.screenshot()) is not None:
         # One more beat before calling it: a card that's mid-dismiss can
         # still register. Only the failure path pays this second look.
         time.sleep(1.5)
         if vision.find_send_like(adb.screenshot()) is not None:
-            save_error_screenshot("like-not-confirmed")
             # Deliberately no attempt to close the card here. The compose
             # overlay has no close control of its own — the only X on screen
             # is skip_button, which floats above the card and dismisses it by
@@ -241,8 +268,9 @@ def do_like(message: str = "") -> None:
             # here. Measured against the saved debug corpus, that point is the
             # "Dating Intent" filter chip on every card screenshot we have —
             # it opened a second overlay instead of clearing the first.)
-            raise RuntimeError(
-                "like not confirmed: compose card still open after Send Like tap"
+            raise SendLikeFailure(
+                "like not confirmed: compose card still open after Send Like tap",
+                screenshot_path=_screenshot_or_none("like-not-confirmed"),
             )
 
     # Confirmed — the feed has advanced to a new profile at the top.
@@ -266,6 +294,16 @@ def save_error_screenshot(context: str) -> str:
     path = errors_dir / f"{ts}_{context}.png"
     path.write_bytes(png)
     return str(path)
+
+
+def _screenshot_or_none(context: str) -> str | None:
+    """save_error_screenshot, but never let a capture failure replace the
+    original error the caller is reporting."""
+    try:
+        return save_error_screenshot(context)
+    except Exception as e:
+        print(f"WARN: could not save error screenshot ({context}): {e!r}")
+        return None
 
 
 def save_debug(frames: list[bytes], decision, profile_idx: int) -> str | None:
@@ -307,30 +345,38 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Override config.ACTIVE_MODE for this run (one-shot). "
              "Must match a file under modes/<name>.py.",
     )
-    p.add_argument(
-        "--set-filters",
-        action="store_true",
-        help="Before looping, drive the in-app age slider to match the "
-             "active mode's AGE_MIN/AGE_MAX. Requires filter_coords.json "
-             "(see calibrate_filters.py).",
-    )
-    p.add_argument(
-        "--location",
-        default=None,
-        help="Before looping, change Hinge's 'My neighborhood' to the "
-             "named city (resolved via locations.json). Orthogonal to "
-             "--mode. Requires location_coords.json + Hinge+/X for "
-             "out-of-area changes.",
-    )
-    p.add_argument(
-        "--rotate",
-        default=None,
-        help="Named rotation path from locations.json _rotations (e.g. "
-             "'atl'). When Hinge's 'You've seen everyone' screen appears, "
-             "advance to the next city in the rotation. Loops back to "
-             "start when exhausted.",
-    )
     return p.parse_args(argv)
+
+
+def _acquire_run_lock(serial: str):
+    """Take the one-run-at-a-time lock on `serial`, or None if another run
+    already holds it.
+
+    hinge-auto and bumble-auto drive the same phone, and an overrun puts
+    both on it at once: the second one's launch_app() takes the foreground
+    while the first keeps tapping, judging and liking whatever feed is now
+    in front of it — which is how the two of them came to report the same
+    women on 2026-10-01.
+
+    flock rather than a look at what's on screen, so that nothing here has
+    to know another bot exists, let alone which package it uses: a new
+    automation joins the contention by running, without every existing bot
+    being edited. The kernel releases the lock when its holder dies —
+    SIGKILL and reboot included — so a wedged run can't lock out the next
+    slot.
+
+    Hold the returned handle for as long as the run lasts: closing it, or
+    letting it be collected, releases the lock. Process exit is the only
+    unlock, on purpose.
+    """
+    path = Path(tempfile.gettempdir()) / f"dating-bot-{serial}.lock"
+    handle = open(path, "w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
 
 
 def main() -> int:
@@ -343,6 +389,16 @@ def main() -> int:
 
     serial = adb.check_device()
     print(f"Connected to: {serial}")
+
+    # Held (never closed) for the rest of the process; see the docstring.
+    run_lock = _acquire_run_lock(serial)
+    if run_lock is None:
+        msg = (f"Another run already has the phone ({serial}) — cancelling "
+               f"this one without touching it. The next cron slot picks it "
+               f"up.")
+        print(f"\n{msg}")
+        report.post_error(msg, title="🔒 Hinge Auto — Run Skipped (phone busy)")
+        return 1
     age_band = (
         f"age {config.AGE_MIN}-{config.AGE_MAX}"
         if (config.AGE_MIN is not None or config.AGE_MAX is not None)
@@ -364,33 +420,6 @@ def main() -> int:
         print("Cap is 0 — skipping this session.")
         return 0
 
-    if args.set_filters:
-        if config.AGE_MIN is None and config.AGE_MAX is None:
-            print("--set-filters requested but active mode has no age range; "
-                  "skipping in-app filter step.")
-        else:
-            import filters
-            print(f"Setting in-app age filter to {config.AGE_MIN}-{config.AGE_MAX}...")
-            filters.set_age_range(config.AGE_MIN, config.AGE_MAX)
-
-    if args.location:
-        import locations
-        resolved = locations.resolve(args.location)
-        print(f"Setting location to '{args.location}' (search: '{resolved}')...")
-        locations.set_location(args.location)
-
-    rotation_list: list[str] | None = None
-    rotation_idx: int = 0
-    if args.rotate:
-        import locations
-        rotation_list = locations.get_rotation(args.rotate)
-        # If --location was also set, start the rotation at that location if
-        # it's in the list; otherwise prepend it (don't replace the rotation).
-        if args.location and args.location in rotation_list:
-            rotation_idx = rotation_list.index(args.location)
-        print(f"Rotation '{args.rotate}': {rotation_list} (starting at "
-              f"index {rotation_idx} = '{rotation_list[rotation_idx]}')")
-
     # Wake screen and launch Hinge
     adb.wake_screen()
     adb.launch_app("co.hinge.app")
@@ -409,7 +438,16 @@ def main() -> int:
     last_frame0_hash: str | None = None
     duplicate_streak = 0
     dialog_streak = 0
+    send_like_streak = 0
+    send_like_screenshots: list[str] = []
     hit_like_cap = False
+    # Set by every path that ends the run on a failure, then consumed once
+    # at the bottom of main() to pick the webhook post. Reports used to go
+    # out at the failure site and the loop would still fall through to the
+    # success post, so an aborted run arrived as a red error *and* a green
+    # "Run Complete".
+    abort_reason: str | None = None
+    abort_screenshots: list[str] = []
 
     while profiles_seen < config.MAX_PROFILES_PER_SESSION:
         profiles_seen += 1
@@ -429,8 +467,8 @@ def main() -> int:
                     msg = (f"Loading screen persisted after {dialog_streak} "
                            f"app restarts.")
                     print(f"GIVING UP: {msg}")
-                    report.post_error(msg, profiles_seen, likes_sent, skips,
-                                      screenshot_path=dialog_ss)
+                    abort_reason = msg
+                    abort_screenshots = [dialog_ss]
                     break
 
                 print(f"  Force-stopping + relaunching Hinge...")
@@ -448,26 +486,6 @@ def main() -> int:
             raise
         t_capture = time.monotonic() - t0
         print(f"Captured {len(frames)} frames")
-
-        # Out-of-candidates detection: if frame 0 shows the "You've seen
-        # everyone for now" screen, we're stuck. If --rotate is on, advance
-        # to the next city; otherwise just break since further iteration
-        # would just force-skip nothing.
-        if rotation_list is not None:
-            import locations
-            if locations.is_out_of_candidates(frames[0]):
-                rotation_idx = (rotation_idx + 1) % len(rotation_list)
-                next_city = rotation_list[rotation_idx]
-                print(f"OUT OF CANDIDATES — rotating to '{next_city}' "
-                      f"(index {rotation_idx}/{len(rotation_list) - 1}).")
-                try:
-                    locations.set_location(next_city)
-                except Exception as e:
-                    print(f"set_location failed: {e!r} — continuing in place.")
-                last_frame0_hash = None
-                duplicate_streak = 0
-                profiles_seen -= 1  # don't count the empty-state capture
-                continue
 
         # If frame 0 is identical to the previous profile's frame 0, Hinge
         # didn't advance after our last action — force-skip rather than
@@ -504,9 +522,18 @@ def main() -> int:
         decision = None
         fatal_error = None
         network_error = None
+        unavailable_error = None
         for attempt in range(3):
             try:
-                decision = judge(frames)
+                # Every attempt runs under a wall-clock ceiling. The
+                # backend's own httpx timeout is per read *operation*, so a
+                # provider that holds the socket open while it queues the
+                # request resets it on every byte and never trips it — a 180s
+                # httpx timeout did not stop a 947s DeepSeek call. See
+                # judge_common.call_with_deadline.
+                decision = call_with_deadline(
+                    lambda: judge(frames), config.JUDGE_DEADLINE_S
+                )
                 break
             except Exception as e:
                 err = repr(e)
@@ -520,6 +547,16 @@ def main() -> int:
                 if is_fatal_judge_error(e):
                     fatal_error = err
                     break
+                # The provider says it never ran the request at all — it shed
+                # load, or held the connection past JUDGE_DEADLINE_S. Unlike
+                # a network blip this doesn't get retried: the request sat in
+                # the provider's queue, so another attempt buys another full
+                # wait, and on 2026-10-01 three of them cost ~47 minutes and
+                # ran a 20-minute session to 74. Usually clears by the next
+                # cron slot; the profile is left unswiped for it.
+                if is_judge_unavailable(e):
+                    unavailable_error = err
+                    break
                 # A network error is different in kind: it usually clears on
                 # its own, so it doesn't cut the attempts short. But if it
                 # outlasts all three, the internet is down — and skipping is
@@ -532,6 +569,17 @@ def main() -> int:
         if fatal_error is not None:
             print(f"\nFATAL judge error — halting loop instead of burning "
                   f"Hinge swipes:\n  {fatal_error}")
+            abort_reason = ("Fatal judge error — halted instead of burning "
+                            f"Hinge swipes.\n{fatal_error}")
+            break
+        if unavailable_error is not None:
+            print(f"\nJUDGE UNAVAILABLE — the provider never ran the request; "
+                  f"ending the run. Nothing was skipped; the next cron slot "
+                  f"resumes from this profile.\n  {unavailable_error}")
+            abort_reason = ("Judge provider unavailable — it shed load or "
+                            "stopped answering, so no profile was judged. "
+                            "Nothing was skipped; the next cron slot resumes "
+                            f"from this profile.\n{unavailable_error}")
             break
         t_judge = time.monotonic() - t1
         if decision is None:
@@ -539,6 +587,9 @@ def main() -> int:
                 print(f"\nNETWORK ERROR on all 3 judge attempts — ending the "
                       f"run. Nothing was skipped; the next cron slot resumes "
                       f"from this profile.\n  {network_error}")
+                abort_reason = ("Network error on all 3 judge attempts — "
+                                "nothing was skipped; the next cron slot "
+                                f"resumes from this profile.\n{network_error}")
                 break
             print("Judge failed 3 times — skipping this profile to keep the loop alive.")
             do_skip()
@@ -588,8 +639,8 @@ def main() -> int:
                 msg = (f"Dialog recovery failed after back button + app restart. "
                        f"Last reason: {decision.reasoning[:200]}")
                 print(f"TIER 3: {msg}")
-                report.post_error(msg, profiles_seen, likes_sent, skips,
-                                  screenshot_path=dialog_ss)
+                abort_reason = msg
+                abort_screenshots = [dialog_ss]
                 break
 
             profiles_seen -= 1
@@ -608,6 +659,9 @@ def main() -> int:
         if decision.decision == "like":
             try:
                 do_like(decision.message)
+                # A sent like proves the whole compose flow works again.
+                send_like_streak = 0
+                send_like_screenshots = []
                 liked_profiles.append({
                     "name": decision.name,
                     "message": decision.message,
@@ -628,6 +682,27 @@ def main() -> int:
                 # profile as well — one no judge ever scored.
                 print(f"do_like aborted: {e} — feed already advanced, "
                       f"not skipping again.")
+                skips += 1
+            except SendLikeFailure as e:
+                send_like_streak += 1
+                if e.screenshot_path:
+                    send_like_screenshots.append(e.screenshot_path)
+                print(f"Send Like failed ({send_like_streak}/"
+                      f"{SEND_LIKE_STREAK_LIMIT}): {e}")
+                if send_like_streak >= SEND_LIKE_STREAK_LIMIT:
+                    msg = (f"Send Like failed {send_like_streak} consecutive "
+                           f"like attempts — halted instead of burning more "
+                           f"profiles.\nLast error: {e}")
+                    print(f"GIVING UP: {msg}")
+                    abort_reason = msg
+                    abort_screenshots = list(send_like_screenshots)
+                    break
+                print("  Recovering by skipping this profile.")
+                try:
+                    do_skip()
+                except Exception as e2:
+                    print(f"do_skip recovery also failed: {e2!r} — "
+                          f"loop will retry next iter.")
                 skips += 1
             except Exception as e:
                 save_error_screenshot(f"do-like-failed-{profiles_seen}")
@@ -664,16 +739,40 @@ def main() -> int:
     print(f"\nDone. {likes_sent} likes sent across {profiles_seen} profiles "
           f"(avg fit {avg_fit:.0f}/100).")
 
-    # Post-run report to Discord webhook (if configured)
-    report.post_run(likes_sent, profiles_seen, skips, total_cost, total_seconds,
-                    liked_profiles, avg_fit_score=avg_fit)
+    # Exactly one post per run — error or success, never both.
+    if abort_reason is not None:
+        report.post_error(abort_reason, profiles_seen, likes_sent, skips,
+                          screenshot_paths=abort_screenshots)
+    else:
+        report.post_run(likes_sent, profiles_seen, skips, total_cost,
+                        total_seconds, liked_profiles, avg_fit_score=avg_fit)
 
     # Cleanup: force-stop Hinge so next run starts fresh regardless of app state,
     # then turn screen off.
     adb.force_stop_app("co.hinge.app")
     adb.turn_screen_off()
-    return 0
+
+    # An aborted run is not a success. This used to return 0 either way, so
+    # cron.log read "Done (exit 0)" for a run that died halfway — the exit
+    # code was the one signal the webhook couldn't stand in for.
+    return 1 if abort_reason is not None else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        # Nothing inside main() reports a crash: its handlers cover judge
+        # failures and stuck screens, but an exception anywhere else (an
+        # adb failure, a typo on a rarely-taken branch) used to die with a
+        # traceback in cron.log and no webhook post at all. That was the
+        # one failure class a channel set to "Only @mentions" would never
+        # surface, which is exactly backwards.
+        #
+        # An import-time error in this file still can't reach here — the
+        # module body fails before this block runs — so a missing module
+        # or bad dependency stays silent. Worth a launcher if that bites.
+        tb = traceback.format_exc()
+        print(tb, file=sys.stderr)
+        report.post_crash(tb)
+        sys.exit(1)

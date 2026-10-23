@@ -13,8 +13,8 @@ NAME = "my_mode"
 # One-line summary. Helps you remember what this mode does.
 DESCRIPTION = "Describe your rubric in a sentence."
 
-# Optional age gate enforced by the judge. Set to None (both) to leave
-# age enforcement to Hinge's in-app filter only.
+# Optional age gate enforced by the judge. Set both to None to enforce no
+# age band at all.
 AGE_MIN = None  # e.g. 22
 AGE_MAX = None  # e.g. 34
 

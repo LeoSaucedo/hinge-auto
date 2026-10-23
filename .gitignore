@@ -2,10 +2,7 @@
 .env
 
 # Calibrated coordinate files (per-device, never commit real values)
-filter_coords.json
-location_coords.json
 matches_coords.json
-locations.json
 
 # Calibration captures from interactive coord mapping
 _cal/
