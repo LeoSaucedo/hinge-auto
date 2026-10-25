@@ -184,6 +184,13 @@ purchase page, and if Back does not clear it the run aborts with
 `ROSE_FIT_THRESHOLD` (default 62 = top ~20% of like scores) and
 `MAX_ROSES_PER_SESSION` (default 1) as the guard rails.
 
+When every profile has been seen, the feed ends on a **"You've seen
+everyone for now"** screen. It is not a dialog Back can dismiss — Back and
+an app restart both land right back on it — so the bot taps its **Review
+skipped profiles** button, verifies the screen changed, and continues on
+the reopened stack. Only a tap that leaves the screen up falls through to
+the usual Back/restart/abort recovery.
+
 The mention rides in the message *content* because that's the only place
 Discord notifies from; one rendered inside an embed is inert.
 `allowed_mentions` is pinned to `users`, so no error post can page a role

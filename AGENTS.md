@@ -172,7 +172,12 @@ Dry-run guidance by tier (see Hard Constraints):
   balance opens the rose purchase page; that is detected by its heading,
   backed out of with Back, and finished as a normal like — a purchase page
   that survives Back aborts the run (`RosePurchaseStuck`), and no buy
-  button is ever tapped. Rose eligibility
+  button is ever tapped. When the feed runs out, the end-of-feed screen
+  ("You've seen everyone for now") is not a dialog Back can dismiss — Back
+  and an app restart both return to it — so the loop taps "Review skipped
+  profiles" to reopen the skipped stack and keeps running; only a tap that
+  fails to clear the screen falls through to the Back/restart/abort tiers.
+  Rose eligibility
   (`SEND_ROSES`, `ROSE_FIT_THRESHOLD`, `MAX_ROSES_PER_SESSION`) is decided
   in the loop; `do_like(prefer_rose=...)` acts on it and returns whether a
   rose was spent.
@@ -202,7 +207,7 @@ Dry-run guidance by tier (see Hard Constraints):
 - `adb.py` / `vision.py` — emulator I/O and per-profile UI element
   detection (hearts, Send Like, rose sheet buttons, the 0-rose count area
   vs any nonzero count including two-digit balances, rose purchase page
-  heading).
+  heading, end-of-feed "Review skipped profiles" button).
 - `metrics.py` — JSONL session logging.
 - `matches_scan.py` — separate Matches-tab scraper for analytics;
   Anthropic-only.

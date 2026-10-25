@@ -4,6 +4,7 @@ Loop: capture profile frames -> ask Claude -> tap like or skip -> repeat.
 """
 
 import argparse
+import enum
 import fcntl
 import hashlib
 import random
@@ -14,6 +15,7 @@ import time
 import traceback
 from datetime import datetime
 from pathlib import Path
+from typing import NamedTuple
 
 from dotenv import load_dotenv
 
@@ -133,7 +135,16 @@ class FeedAlreadyAdvanced(RuntimeError):
     it tap skip a second time — spending the *next* profile too, one the
     judge never saw. Raising a distinct type lets the handler tell "the feed
     already moved" from "the like failed and nothing has moved yet".
+
+    `like_sent` marks recovery paths that sent the interrupted like
+    themselves. The handler counts those against the session like cap
+    instead of recording a skip, so the report never calls a real send a
+    skip.
     """
+
+    def __init__(self, message: str, like_sent: bool = False):
+        super().__init__(message)
+        self.like_sent = like_sent
 
 
 # Consecutive Send Like failures (button not found, or the card never
@@ -178,6 +189,34 @@ class RosePurchaseStuck(SendLikeFailure):
     """
 
 
+class RecoveryOutcome(enum.Enum):
+    """What a recovery helper did to the feed.
+
+    NONE     no rose UI screen was present; the caller carries on.
+    CLEARED  the screen was cleared without a send from this helper.
+    LIKED    the interrupted like was sent by this helper.
+    SKIPPED  do_skip ran (only from _skip_unless_rose_sheet).
+    """
+
+    NONE = "none"
+    CLEARED = "cleared"
+    LIKED = "liked"
+    SKIPPED = "skipped"
+
+
+class SheetResolution(NamedTuple):
+    """The result of one resolution tap on a rose sheet.
+
+    `rose_spent` is what do_like returns to main. `like_sent` lets the
+    recovery paths tell a resolution that sent the like from one whose
+    purchase-page detour found nothing left to send, so the session like
+    count stays honest.
+    """
+
+    rose_spent: bool
+    like_sent: bool
+
+
 def _dismiss_compose_card_if_visible() -> None:
     """Check for a stale compose card, rose sheet, or purchase page.
 
@@ -185,29 +224,31 @@ def _dismiss_compose_card_if_visible() -> None:
     advance past this profile, logging the event.
     """
     ss = adb.screenshot()
-    if _recover_from_rose_purchase("stale", ss):
+    purchase = _recover_from_rose_purchase("stale", ss)
+    if purchase is not RecoveryOutcome.NONE:
         # The page is only ever the answer to a rose send, so the like
         # underneath it was interrupted. Recovery either sent that like or
         # revealed that the feed already moved — either way this profile
         # is consumed and must not be skipped a second time.
         raise FeedAlreadyAdvanced(
-            "stale rose purchase page resolved; feed already advanced"
+            "stale rose purchase page resolved; feed already advanced",
+            like_sent=(purchase is RecoveryOutcome.LIKED),
         )
     sheet = vision.find_rose_sheet(ss)
     if sheet is not None:
         # The sheet is a *response* to a send tap, so the like underneath
         # it never went out and the feed never advanced. Finish that like
-        # the safe way — never with a rose here, this is recovery.
+        # the safe way — never with a rose here, this is recovery. Going
+        # through _resolve_rose_sheet (instead of tapping and assuming)
+        # catches a tap that did nothing and backs out of a stuck sheet.
         print("⚠️  Stale rose sheet detected — resolving the interrupted like")
         save_error_screenshot("stale-rose-sheet", ss)
-        if sheet.send_like_anyway is not None:
-            adb.tap(*sheet.send_like_anyway)
-            adb.jitter_sleep("after_like_sent")
-            raise FeedAlreadyAdvanced(
-                "stale rose sheet resolved; feed already advanced"
-            )
-        _fail_after_sheet("stale rose sheet has no 'Send Like anyway' target",
-                          "stale", ss)
+        result = _resolve_rose_sheet(sheet, prefer_rose=False,
+                                     context="stale", png=ss)
+        raise FeedAlreadyAdvanced(
+            "stale rose sheet resolved; feed already advanced",
+            like_sent=result.like_sent,
+        )
     if vision.find_send_like(ss) is not None:
         print("⚠️  Stale compose card detected — tapping skip")
         save_error_screenshot("stale-compose-card", ss)
@@ -246,7 +287,7 @@ def _fail_after_sheet(reason: str, context: str,
 
 
 def _recover_from_rose_purchase(context: str,
-                                png: bytes | None = None) -> bool:
+                                png: bytes | None = None) -> RecoveryOutcome:
     """Leave the rose purchase page and finish as a normal like.
 
     The page appears when the rose pill — or "Send a Rose" on the sheet —
@@ -260,14 +301,18 @@ def _recover_from_rose_purchase(context: str,
     does not capture and re-check the same screen. Without it, one
     screenshot is taken here.
 
-    Returns False when there was no purchase page to handle (the caller
-    can carry on with what it saw), True once the page is resolved and
-    the send settled. A purchase page never spends a rose.
+    Returns NONE when there was no purchase page to handle (the caller can
+    carry on with what it saw). Otherwise the page is resolved: LIKED when
+    this recovery sent the interrupted like, CLEARED when Back left nothing
+    left to send. A purchase page never spends a rose.
+
+    Must not run under config.DRY_RUN: both resolved outcomes can tap Send
+    Like. main()'s dialog branch guards the call.
     """
     if png is None:
         png = adb.screenshot()
     if not vision.find_rose_purchase(png):
-        return False
+        return RecoveryOutcome.NONE
 
     screenshot = _screenshot_or_none(f"rose-purchase-{context}", png)
     print("Rose purchase page detected — pressing Back, then sending a "
@@ -292,24 +337,29 @@ def _recover_from_rose_purchase(context: str,
         # ordinary send, something is badly wrong and the run must stop.
         _settle_after_send(False, f"{context}-after-purchase",
                            recover_purchase=False)
-        return True
+        return RecoveryOutcome.LIKED
 
     sheet = vision.find_rose_sheet(png)
     if sheet is not None:
         # Back uncovered a sheet instead of the composer (rare, but it is
         # the one screen we know how to resolve safely).
-        _resolve_rose_sheet(sheet, prefer_rose=False, context=context,
-                            png=png)
-        return True
+        result = _resolve_rose_sheet(sheet, prefer_rose=False,
+                                     context=context, png=png)
+        return (RecoveryOutcome.LIKED if result.like_sent
+                else RecoveryOutcome.CLEARED)
 
     # Neither: Back landed on the feed, or the like had already gone out.
+    # Nothing was sent here, so this is not counted as a like.
     print("  Rose purchase page cleared — nothing left to send.")
-    return True
+    return RecoveryOutcome.CLEARED
 
 
 def _resolve_rose_sheet(sheet: vision.RoseSheet, prefer_rose: bool,
-                        context: str, png: bytes | None = None) -> bool:
-    """Tap exactly one button on a rose sheet; True if that button was a rose.
+                        context: str,
+                        png: bytes | None = None) -> SheetResolution:
+    """Tap exactly one button on a rose sheet.
+
+    Returns whether that tap spent a rose and whether it sent a like.
 
     A rose intent can only be honoured when the "Send a Rose" target was
     actually matched; a sheet without it falls back to "Send Like anyway"
@@ -341,8 +391,9 @@ def _resolve_rose_sheet(sheet: vision.RoseSheet, prefer_rose: bool,
         # "Send a Rose" opened the purchase page, so the balance was empty
         # after all. Back out and send the like without a rose; nothing
         # was spent. Recovery either resolves the page or aborts.
-        _recover_from_rose_purchase(context, png)
-        return False
+        outcome = _recover_from_rose_purchase(context, png)
+        return SheetResolution(rose_spent=False,
+                               like_sent=(outcome is RecoveryOutcome.LIKED))
     if vision.find_rose_sheet(png) is not None:
         _fail_after_sheet("rose sheet still up after one tap", context, png)
     if vision.find_send_like(png) is not None:
@@ -351,7 +402,8 @@ def _resolve_rose_sheet(sheet: vision.RoseSheet, prefer_rose: bool,
             f"like not confirmed: compose card still open after '{label}' tap",
             screenshot_path=_screenshot_or_none(context, png),
         )
-    return rose
+    # Sheet gone, card gone: the tap sent the like the sheet was guarding.
+    return SheetResolution(rose_spent=rose, like_sent=True)
 
 
 def _purchase_during_settle(recover_purchase: bool, context: str,
@@ -406,7 +458,7 @@ def _settle_after_send(prefer_rose: bool, context: str,
         return _purchase_during_settle(recover_purchase, context, png)
     sheet = vision.find_rose_sheet(png)
     if sheet is not None:
-        return _resolve_rose_sheet(sheet, prefer_rose, context, png)
+        return _resolve_rose_sheet(sheet, prefer_rose, context, png).rose_spent
 
     if vision.find_send_like(png) is not None:
         if fallback_send_xy is not None:
@@ -429,7 +481,7 @@ def _settle_after_send(prefer_rose: bool, context: str,
             return _purchase_during_settle(recover_purchase, context, png)
         sheet = vision.find_rose_sheet(png)
         if sheet is not None:
-            return _resolve_rose_sheet(sheet, prefer_rose, context, png)
+            return _resolve_rose_sheet(sheet, prefer_rose, context, png).rose_spent
         if vision.find_send_like(png) is not None:
             raise SendLikeFailure(
                 "like not confirmed: compose card still open after Send Like tap",
@@ -448,7 +500,7 @@ def _settle_after_send(prefer_rose: bool, context: str,
         # Late sheet: the card already read as closed, so the send state
         # is ambiguous — resolve with the option that cannot overspend.
         return _resolve_rose_sheet(sheet, prefer_rose=False, context=context,
-                                   png=png)
+                                   png=png).rose_spent
     if vision.find_send_like(png) is not None:
         raise SendLikeFailure(
             "like not confirmed: compose card still open after Send Like tap",
@@ -457,7 +509,7 @@ def _settle_after_send(prefer_rose: bool, context: str,
     return pill_tapped
 
 
-def _skip_unless_rose_sheet(context: str) -> bool:
+def _skip_unless_rose_sheet(context: str) -> RecoveryOutcome:
     """do_skip, unless a rose sheet or purchase page covers the skip button.
 
     The sheet spans the lower half of the screen and the purchase page is
@@ -468,16 +520,16 @@ def _skip_unless_rose_sheet(context: str) -> bool:
     resolved like any other: Back, then a normal like — and since that
     send moves the feed, the profile is not skipped again.
 
-    Returns True when the skip ran, False when a rose UI screen was
-    resolved instead. Only error paths pay the screenshot — do_skip
-    itself is untouched.
+    Returns SKIPPED when the skip ran, LIKED when the purchase recovery
+    sent the interrupted like, CLEARED when it backed out with nothing
+    left to send. Only error paths pay the screenshot — do_skip itself is
+    untouched.
     """
     png = adb.screenshot()
     if vision.find_rose_purchase(png):
         print(f"Rose purchase page is up during {context} — backing out and "
               f"finishing the like instead of skipping.")
-        _recover_from_rose_purchase(context, png)
-        return False
+        return _recover_from_rose_purchase(context, png)
     if vision.find_rose_sheet(png) is not None:
         print(f"Rose sheet is up during {context} — pressing Back before skip.")
         _recover_from_dialog()
@@ -489,7 +541,7 @@ def _skip_unless_rose_sheet(context: str) -> bool:
                     f"rose-sheet-{context}", png),
             )
     do_skip()
-    return True
+    return RecoveryOutcome.SKIPPED
 
 
 def do_like(message: str = "", prefer_rose: bool = False) -> bool:
@@ -772,6 +824,11 @@ def main() -> int:
     time.sleep(2)
 
     likes_sent = 0
+    # Likes that a recovery path sent for an interrupted profile. They have
+    # no profile record (the decision belonged to the interrupted send, not
+    # to the screenshot that revealed it), so they are reported separately
+    # but still count against the session like cap below.
+    recovered_likes = 0
     skips = 0
     roses_sent = 0
     profiles_seen = 0
@@ -966,51 +1023,108 @@ def main() -> int:
             print(f"\nDIALOG DETECTED (streak {dialog_streak}): {decision.reasoning[:120]}")
             dialog_ss = save_error_screenshot(f"dialog-streak-{dialog_streak}")
 
-            # A rose purchase page left over from an interrupted rose
-            # attempt (or a pill tap that found an empty balance): back
-            # out, send the interrupted like as an ordinary like, and let
-            # the feed advance. Never tap through the page itself.
-            try:
-                purchase_resolved = _recover_from_rose_purchase("dialog")
-            except RosePurchaseStuck as e:
-                msg = (f"Rose purchase page is stuck during dialog recovery: "
-                       f"Back does not clear it and every control on it buys "
-                       f"something. Halting without tapping.\n{e}")
-                print(f"GIVING UP: {msg}")
-                abort_reason = msg
-                abort_screenshots = ([e.screenshot_path]
-                                     if e.screenshot_path else [dialog_ss])
-                break
-            if purchase_resolved:
-                print("  Rose purchase page resolved — feed advancing.")
+            # A rose purchase page or sheet left over from an interrupted
+            # send is recovery's business — but both recoveries can tap
+            # Send Like, so a dry run must never enter them. Falling
+            # through to the tiers below clears the screen with Back alone.
+            outcome = RecoveryOutcome.NONE
+            review_reopened = False
+            if not config.DRY_RUN:
+                try:
+                    outcome = _recover_from_rose_purchase("dialog")
+                except FeedAlreadyAdvanced as e:
+                    # Back uncovered the feed: the interrupted like is gone
+                    # either way, but this recovery did not send one.
+                    print(f"  Recovery advanced the feed: {e}")
+                    outcome = RecoveryOutcome.CLEARED
+                except SendLikeFailure as e:
+                    # RoseSheetStuck and RosePurchaseStuck subclass this.
+                    # Any of them means the screen or the restored send
+                    # cannot be recovered here, and there is no safe skip
+                    # while it is up — abort instead of letting it escape
+                    # main() into the generic crash post, which would drop
+                    # the run stats and screenshots collected so far.
+                    if isinstance(e, RosePurchaseStuck):
+                        msg = ("Rose purchase page is stuck during dialog "
+                               "recovery: Back does not clear it and every "
+                               f"control on it buys something. Halting "
+                               f"without tapping.\n{e}")
+                    elif isinstance(e, RoseSheetStuck):
+                        msg = ("Rose sheet is stuck during dialog recovery: "
+                               "neither a resolution tap nor Back clears it. "
+                               f"Halting without tapping.\n{e}")
+                    else:
+                        msg = ("Sending the interrupted like failed during "
+                               "dialog recovery — halting instead of "
+                               f"skipping.\n{e}")
+                    print(f"GIVING UP: {msg}")
+                    abort_reason = msg
+                    abort_screenshots = ([e.screenshot_path]
+                                         if e.screenshot_path else [dialog_ss])
+                    break
+
+                if outcome is RecoveryOutcome.NONE:
+                    # One frame serves both leftover-send checks: a rose
+                    # sheet and the end-of-feed screen cannot both be up.
+                    png = adb.screenshot()
+                    sheet = vision.find_rose_sheet(png)
+                    if sheet is not None and sheet.send_like_anyway is not None:
+                        # A "Send a Rose instead?" sheet left over from an
+                        # interrupted like: the like underneath never went
+                        # out, so this is not a dialog to back out of —
+                        # finish it with the non-spending option and let the
+                        # feed advance. This is the crash/restart safety net
+                        # for the exact bug the sheet handler fixes.
+                        print("  Interrupted like found: tapping "
+                              "'Send Like anyway'.")
+                        adb.tap(*sheet.send_like_anyway)
+                        adb.jitter_sleep("after_like_sent")
+                        png = adb.screenshot()
+                        if (vision.find_rose_sheet(png) is None
+                                and vision.find_send_like(png) is None):
+                            outcome = RecoveryOutcome.LIKED
+                        else:
+                            print("  Sheet did not clear — continuing with "
+                                  "dialog recovery.")
+                    else:
+                        # The end-of-feed screen ("You've seen everyone for
+                        # now") is not a transient dialog: Back and an app
+                        # restart both land right back on it, so the tiers
+                        # below would burn all three strikes and abort the
+                        # run. The button reopens the skipped stack, which
+                        # is the only way the feed advances from here.
+                        review_xy = vision.find_review_skipped(png)
+                        if review_xy is not None:
+                            print("  End of feed — reopening skipped "
+                                  "profiles.")
+                            adb.tap(*review_xy)
+                            adb.jitter_sleep("after_tap")
+                            if vision.find_review_skipped(
+                                    adb.screenshot()) is None:
+                                outcome = RecoveryOutcome.CLEARED
+                                review_reopened = True
+                            else:
+                                print("  Review button did not open the "
+                                      "skipped stack — continuing with "
+                                      "dialog recovery.")
+
+            if outcome is not RecoveryOutcome.NONE:
+                if review_reopened:
+                    print("  Skipped stack reopened — continuing the run.")
+                else:
+                    print("  Interrupted send recovered — feed advancing.")
                 profiles_seen -= 1
                 last_frame0_hash = None
                 duplicate_streak = 0
                 dialog_streak = 0
                 _feed_at_top = True
+                if outcome is RecoveryOutcome.LIKED:
+                    recovered_likes += 1
+                if likes_sent + recovered_likes >= session_like_cap:
+                    print(f"Hit max likes cap ({session_like_cap}), "
+                          f"including recovered likes. Stopping.")
+                    break
                 continue
-
-            # A "Send a Rose instead?" sheet left over from an interrupted
-            # like: the like underneath never went out, so this is not a
-            # dialog to back out of — finish it with the non-spending
-            # option and let the feed advance. This is the crash/restart
-            # safety net for the exact bug the sheet handler fixes.
-            sheet = vision.find_rose_sheet(adb.screenshot())
-            if sheet is not None and sheet.send_like_anyway is not None:
-                print("  Interrupted like found: tapping 'Send Like anyway'.")
-                adb.tap(*sheet.send_like_anyway)
-                adb.jitter_sleep("after_like_sent")
-                png = adb.screenshot()
-                if (vision.find_rose_sheet(png) is None
-                        and vision.find_send_like(png) is None):
-                    print("  Interrupted like resolved — feed advancing.")
-                    profiles_seen -= 1
-                    last_frame0_hash = None
-                    duplicate_streak = 0
-                    dialog_streak = 0
-                    _feed_at_top = True
-                    continue
-                print("  Sheet did not clear — continuing with dialog recovery.")
 
             if dialog_streak == 1:
                 # ── Tier 1: press back to dismiss ──
@@ -1086,19 +1200,27 @@ def main() -> int:
                     "rose": rose_spent,
                 })
                 likes_sent += 1
-                if likes_sent >= session_like_cap:
+                if likes_sent + recovered_likes >= session_like_cap:
                     print(f"Hit max likes cap ({session_like_cap}). Stopping.")
                     # Don't break here — the profile still needs its log
                     # record + cost tally below (metrics.log_profile).
                     hit_like_cap = True
             except FeedAlreadyAdvanced as e:
-                # _dismiss_compose_card_if_visible already tapped skip and
-                # saved its own screenshot, so this profile is gone. The
-                # handler below would tap skip again, spending the next
-                # profile as well — one no judge ever scored.
+                # _dismiss_compose_card_if_visible already tapped skip (or
+                # finished the interrupted like) and saved its own
+                # screenshot, so this profile is gone. The handler below
+                # would tap skip again, spending the next profile as well —
+                # one no judge ever scored.
                 print(f"do_like aborted: {e} — feed already advanced, "
                       f"not skipping again.")
-                skips += 1
+                if e.like_sent:
+                    recovered_likes += 1
+                    if likes_sent + recovered_likes >= session_like_cap:
+                        print(f"Hit max likes cap ({session_like_cap}), "
+                              f"including recovered likes. Stopping.")
+                        hit_like_cap = True
+                else:
+                    skips += 1
             except SendLikeFailure as e:
                 send_like_streak += 1
                 if e.screenshot_path:
@@ -1132,8 +1254,16 @@ def main() -> int:
                     break
                 print("  Recovering by skipping this profile.")
                 try:
-                    if _skip_unless_rose_sheet(f"send-like-{profiles_seen}"):
+                    outcome = _skip_unless_rose_sheet(
+                        f"send-like-{profiles_seen}")
+                    if outcome is RecoveryOutcome.SKIPPED:
                         skips += 1
+                    elif outcome is RecoveryOutcome.LIKED:
+                        recovered_likes += 1
+                        if likes_sent + recovered_likes >= session_like_cap:
+                            print(f"Hit max likes cap ({session_like_cap}), "
+                                  f"including recovered likes. Stopping.")
+                            hit_like_cap = True
                 except (RoseSheetStuck, RosePurchaseStuck) as e2:
                     if e2.screenshot_path:
                         send_like_screenshots.append(e2.screenshot_path)
@@ -1151,8 +1281,16 @@ def main() -> int:
                 save_error_screenshot(f"do-like-failed-{profiles_seen}")
                 print(f"do_like failed: {e!r} — recovering by skipping this profile.")
                 try:
-                    if _skip_unless_rose_sheet(f"do-like-failed-{profiles_seen}"):
+                    outcome = _skip_unless_rose_sheet(
+                        f"do-like-failed-{profiles_seen}")
+                    if outcome is RecoveryOutcome.SKIPPED:
                         skips += 1
+                    elif outcome is RecoveryOutcome.LIKED:
+                        recovered_likes += 1
+                        if likes_sent + recovered_likes >= session_like_cap:
+                            print(f"Hit max likes cap ({session_like_cap}), "
+                                  f"including recovered likes. Stopping.")
+                            hit_like_cap = True
                 except (RoseSheetStuck, RosePurchaseStuck) as e2:
                     msg = (f"A rose UI screen is stuck during error recovery — "
                            f"halting without skipping.\n{e2}")
@@ -1179,25 +1317,31 @@ def main() -> int:
         total_seconds += timing["total_seconds"]
         avg_fit = (fit_score_sum / fit_score_count) if fit_score_count else 0
         metrics.print_running_totals(
-            profiles_seen, likes_sent, skips, total_cost, total_seconds,
-            avg_fit_score=avg_fit,
+            profiles_seen, likes_sent + recovered_likes, skips, total_cost,
+            total_seconds, avg_fit_score=avg_fit,
         )
 
         if hit_like_cap:
             break
 
     avg_fit = (fit_score_sum / fit_score_count) if fit_score_count else 0
-    print(f"\nDone. {likes_sent} likes sent across {profiles_seen} profiles "
-          f"(avg fit {avg_fit:.0f}/100).")
+    total_likes = likes_sent + recovered_likes
+    recovered_note = (f" ({recovered_likes} recovered)"
+                      if recovered_likes else "")
+    print(f"\nDone. {total_likes} likes sent{recovered_note} across "
+          f"{profiles_seen} profiles (avg fit {avg_fit:.0f}/100).")
 
     # Exactly one post per run — error or success, never both.
     if abort_reason is not None:
         report.post_error(abort_reason, profiles_seen, likes_sent, skips,
                           roses_sent=roses_sent,
+                          recovered_likes=recovered_likes,
                           screenshot_paths=abort_screenshots)
     else:
         report.post_run(likes_sent, profiles_seen, skips, total_cost,
-                        total_seconds, liked_profiles, avg_fit_score=avg_fit)
+                        total_seconds, liked_profiles,
+                        avg_fit_score=avg_fit,
+                        recovered_likes=recovered_likes)
 
     # Cleanup: force-stop Hinge so next run starts fresh regardless of app state,
     # then turn screen off.

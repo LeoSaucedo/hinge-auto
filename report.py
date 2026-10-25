@@ -156,6 +156,7 @@ def _mention() -> str:
 def post_error(message: str, profiles_seen: int | None = None,
                likes_sent: int | None = None, skips: int | None = None,
                roses_sent: int | None = None,
+               recovered_likes: int | None = None,
                screenshot_paths: list[str] | None = None,
                title: str = "❌ Hinge Auto — Run Aborted") -> None:
     """Send a fatal-error embed to the Discord webhook, mentioning the user.
@@ -168,7 +169,10 @@ def post_error(message: str, profiles_seen: int | None = None,
     main.py has no frame to read them from — omitting the fields beats
     posting a row of zeroes that reads like a real (empty) run. A
     `roses_sent` count adds a 🌹 field only when a rose actually went out,
-    so a rose spent before the abort is still visible in Discord."""
+    so a rose spent before the abort is still visible in Discord. The same
+    goes for `recovered_likes`: recovery sends have no profile record, so
+    they get their own field instead of being folded into `likes_sent`.
+    """
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
     if not webhook_url:
         return
@@ -189,6 +193,9 @@ def post_error(message: str, profiles_seen: int | None = None,
     if roses_sent:
         fields.append({"name": "🌹 Roses", "value": str(roses_sent),
                        "inline": True})
+    if recovered_likes:
+        fields.append({"name": "♻️ Recovered",
+                       "value": str(recovered_likes), "inline": True})
     if fields:
         embed["fields"] = fields
 
@@ -273,8 +280,15 @@ def _send_embed_only(webhook_url: str, embed: dict, content: str = "",
 def post_run(likes_sent: int, profiles_seen: int, skips: int,
              total_cost: float, total_duration_s: float,
              liked_profiles: list[dict] | None = None,
-             avg_fit_score: float = 0.0) -> None:
-    """Post profile photos with stats in the first batch, no separate summary."""
+             avg_fit_score: float = 0.0,
+             recovered_likes: int = 0) -> None:
+    """Post profile photos with stats in the first batch, no separate summary.
+
+    `recovered_likes` counts likes that a recovery path sent for an
+    interrupted profile. They are added as their own field only when
+    nonzero: they have no entry in `liked_profiles`, so folding them into
+    `likes_sent` would make the count disagree with the Liked list.
+    """
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
     if not webhook_url:
         return
@@ -310,14 +324,18 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
         })
 
     if not profile_data:
+        fields = [
+            {"name": "👀 Seen",  "value": str(profiles_seen), "inline": True},
+            {"name": "❤️ Likes", "value": str(likes_sent),    "inline": True},
+            {"name": "⏭️ Skip",  "value": str(skips),         "inline": True},
+        ]
+        if recovered_likes:
+            fields.append({"name": "♻️ Recovered",
+                           "value": str(recovered_likes), "inline": True})
         embed = {
             "title": "Hinge Auto — Run Complete",
             "color": 0x57F287,
-            "fields": [
-                {"name": "👀 Seen",  "value": str(profiles_seen), "inline": True},
-                {"name": "❤️ Likes", "value": str(likes_sent),    "inline": True},
-                {"name": "⏭️ Skip",  "value": str(skips),         "inline": True},
-            ],
+            "fields": fields,
             "footer": _footer(total_cost, total_duration_s, avg_fit_score),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
         }
@@ -338,15 +356,20 @@ def post_run(likes_sent: int, profiles_seen: int, skips: int,
         profile_lines = "\n".join(_liked_line(n, p) for n, p in batch)
 
         if batch_idx == 0:
+            fields = [
+                {"name": "👀 Seen",  "value": str(profiles_seen), "inline": True},
+                {"name": "❤️ Likes", "value": str(likes_sent),    "inline": True},
+                {"name": "⏭️ Skip",  "value": str(skips),         "inline": True},
+            ]
+            if recovered_likes:
+                fields.append({"name": "♻️ Recovered",
+                               "value": str(recovered_likes), "inline": True})
+            fields.append({"name": "Liked", "value": profile_lines,
+                           "inline": False})
             embed = {
                 "title": f"Hinge Auto{f' ({start_num}-{end_num})' if len(batches) > 1 else ''}",
                 "color": 0x57F287,
-                "fields": [
-                    {"name": "👀 Seen",  "value": str(profiles_seen), "inline": True},
-                    {"name": "❤️ Likes", "value": str(likes_sent),    "inline": True},
-                    {"name": "⏭️ Skip",  "value": str(skips),         "inline": True},
-                    {"name": "Liked", "value": profile_lines, "inline": False},
-                ],
+                "fields": fields,
                 "footer": _footer(total_cost, total_duration_s, avg_fit_score),
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
             }

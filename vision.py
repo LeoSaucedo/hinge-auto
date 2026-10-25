@@ -28,6 +28,7 @@ _rose_zero_template: np.ndarray | None = None
 _rose_zero_count_mask: np.ndarray | None = None
 _rose_zero_count_box: tuple[int, int, int, int] | None = None
 _rose_purchase_template: np.ndarray | None = None
+_review_skipped_template: np.ndarray | None = None
 
 _SENDLIKE_CONFIDENCE = 0.85
 _HEART_CONFIDENCE = 0.85
@@ -35,6 +36,7 @@ _ROSE_SHEET_CONFIDENCE = 0.85
 _ROSE_ZERO_COUNT_IOU = 0.90
 _ROSE_ZERO_COUNT_SEARCH_PAD = 3
 _ROSE_PURCHASE_CONFIDENCE = 0.85
+_REVIEW_SKIPPED_CONFIDENCE = 0.85
 
 # The button's appearance varies twice over: the label depends on the
 # account's subscription (Hinge X relabels it "Send Priority Like"), and
@@ -152,6 +154,17 @@ _ROSE_ZERO_TEMPLATE_FILE = "zero_rose_pill.jpg"
 # margin. Calling it once costs ~0.23 s per frame on the Pi.
 _ROSE_PURCHASE_TEMPLATE_FILE = "rose_purchase_title.jpg"
 
+# The end-of-feed screen's "Review skipped profiles" button text, cropped
+# from the 20261025-135810_dialog-streak-1.png run screenshot. This is the
+# "You've seen everyone for now" screen the feed lands on after every
+# profile is consumed; Back and an app restart both return to it, so the
+# only way out is the button that reopens the skipped stack. Text-only
+# crop: the white pill's border is near-invisible on the white background,
+# while the label is unique. 1.0000 self-match and 0.99 on the older
+# end-screen frames in debug/errors; no match on any other error frame or
+# sampled profile frame in the corpus, so 0.85 is a wide margin.
+_REVIEW_SKIPPED_TEMPLATE_FILE = "review_skipped_profiles.jpg"
+
 
 def _locate_zero_count(
         tmpl: np.ndarray,
@@ -241,6 +254,7 @@ def _load_templates() -> None:
     global _heart_templates, _sendlike_templates
     global _rose_sheet_templates, _rose_zero_template, _rose_purchase_template
     global _rose_zero_count_mask, _rose_zero_count_box
+    global _review_skipped_template
     if _heart_templates is None:
         _heart_templates = [
             (Path(name).stem,
@@ -275,6 +289,11 @@ def _load_templates() -> None:
         if purchase_path.exists():
             _rose_purchase_template = cv2.imread(str(purchase_path),
                                                  cv2.IMREAD_COLOR)
+    if _review_skipped_template is None:
+        review_path = _TEMPLATE_DIR / _REVIEW_SKIPPED_TEMPLATE_FILE
+        if review_path.exists():
+            _review_skipped_template = cv2.imread(str(review_path),
+                                                  cv2.IMREAD_COLOR)
 
 
 # Decoding a 720x1600 screencap costs ~20 ms, and the send-settlement path
@@ -554,6 +573,39 @@ def find_rose_purchase(png: bytes) -> bool:
         print(f"  Rose purchase screen: heading matched conf={max_val:.3f}")
         return True
     return False
+
+
+def find_review_skipped(png: bytes) -> tuple[int, int] | None:
+    """Locate the end-of-feed screen's "Review skipped profiles" button.
+
+    Returns that button's tap center, or None when the screen is not up.
+    The screen ("You've seen everyone for now") is where the feed lands
+    once every profile has been consumed; Back and an app restart both
+    come straight back to it, so reopening the skipped stack is the only
+    way to keep the run going.
+
+    Full-frame match: the button's position is fixed on this screen (the
+    filter chips above it do not move either), and this only runs on the
+    NOT_A_PROFILE path, so it costs ~0.23 s on dialog frames only.
+    """
+    _load_templates()
+    if _review_skipped_template is None:
+        return None
+
+    screen = _png_to_ndarray(png)
+    tmpl_h, tmpl_w = _review_skipped_template.shape[:2]
+    if screen.shape[0] < tmpl_h or screen.shape[1] < tmpl_w:
+        return None
+
+    result = cv2.matchTemplate(screen, _review_skipped_template,
+                               cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+    if max_val < _REVIEW_SKIPPED_CONFIDENCE:
+        return None
+    center = (max_loc[0] + tmpl_w // 2, max_loc[1] + tmpl_h // 2)
+    print(f"  End-of-feed screen: 'Review skipped profiles' at {center} "
+          f"conf={max_val:.3f}")
+    return center
 
 
 # ============================================================
