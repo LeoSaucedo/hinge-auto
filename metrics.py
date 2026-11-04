@@ -138,6 +138,7 @@ def log_profile(
     decision,
     timing: dict[str, float],
     log_path: Path | None = None,
+    rose_sent: bool = False,
 ) -> None:
     """Append a JSONL record for one profile."""
     if log_path is None:
@@ -162,6 +163,7 @@ def log_profile(
         "premade_id": decision.premade_id,
         "prompt_referenced": decision.prompt_referenced,
         "dominant_factor": decision.dominant_factor,
+        "rose_sent": rose_sent,
         "timing": timing,
         "tokens": decision.usage,
         "estimated_cost_usd": round(estimated_cost(decision.usage), 5),
